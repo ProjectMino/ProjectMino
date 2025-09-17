@@ -28,6 +28,15 @@ struct Piece {
 extern const std::array<std::vector<Vec>,7> TETROS;
 extern const std::array<SDL_Color,7> T_COLORS;
 
+// forward-declare so prototype can appear before full class definition
+class Game;
+
+// T-Spin result enum (Guideline)
+enum class TSpinType { None = 0, Mini = 1, Full = 2 };
+
+// prototype for spin detection (implemented in spins.cpp)
+TSpinType detect_tspin(const Game &game, const Piece &current, Vec cur_pos);
+
 struct Game {
     SDL_Window* win = nullptr;
     SDL_Renderer* ren = nullptr;
@@ -73,8 +82,15 @@ struct Game {
     // Text effects and spin detection
     struct TextEffect { std::string text; SDL_Color color; int life_ms; std::chrono::steady_clock::time_point start; int x,y; int type; };
     std::vector<TextEffect> effects;
+
+    // rotation / spin helpers
+    int last_kick_index = -1;        // index in the wall-kick table (0 == no offset)
+    Vec last_kick_offset = {0,0};    // actual offset applied on last successful rotation
     bool last_was_rotate = false;
     std::chrono::steady_clock::time_point last_rotate_time;
+
+    // new: corner count before the last rotation (used to make T-spin detection stricter)
+    int last_pre_rot_corner_count = 0;
 
     void spawn_text_effect(const std::string &txt, SDL_Color col, int life_ms, int x, int y, int type=0);
     void draw_colored_text(int x,int y,const std::string &text, SDL_Color color, float scale=1.0f, int alpha=255);
@@ -112,6 +128,3 @@ struct Game {
     void draw_text(int x,int y,const std::string &text);
     void render();
 };
-
-// spins detection API (implemented in spins.cpp)
-bool detect_tspin(const Game &game, const Piece &current, Vec cur_pos);

@@ -11,15 +11,23 @@ const std::array<std::vector<Vec>,7> TETROS = {
 };
 
 const std::array<SDL_Color,7> T_COLORS = {
-    SDL_Color{0,255,255,255}, SDL_Color{0,0,255,255}, SDL_Color{255,165,0,255},
-    SDL_Color{255,255,0,255}, SDL_Color{0,255,0,255}, SDL_Color{128,0,128,255}, SDL_Color{255,0,0,255}
+    SDL_Color{159,239,247,255}, // I - #9FEFF7
+    SDL_Color{255,227,159,255}, // O - #FFE39F
+    SDL_Color{214,179,255,255}, // T - #D6B3FF
+    SDL_Color{191,247,177,255}, // S - #BFF7B1
+    SDL_Color{255,179,179,255}, // Z - #FFB3B3
+    SDL_Color{175,203,255,255}, // J - #AFCBFF
+    SDL_Color{255,214,168,255}  // L - #FFD6A8
 };
 
 Game::Game(){
     rng.seed((unsigned)std::chrono::high_resolution_clock::now().time_since_epoch().count());
     refill_bag();
-    for (int i=0;i<5;i++) next_queue.push_back(next_from_bag());
+    // ensure the next queue is seeded before spawning the first piece
+    for (int i = 0; i < 5; ++i) next_queue.push_back(next_from_bag());
+    // spawn the first current piece and keep queue filled
     spawn_from_queue();
+    for (int i = 1; i < 5; ++i) spawn_from_queue(); // if original logic expected 5 total calls
     last_horiz_move = std::chrono::steady_clock::now();
     last_soft_move = std::chrono::steady_clock::now();
     start_time = std::chrono::steady_clock::now();
@@ -27,13 +35,16 @@ Game::Game(){
 
 void Game::refill_bag(){
     bag.clear();
-    for(int i=0;i<7;i++) bag.push_back(i);
+    // fill with 0..6 then shuffle
+    for (int i = 0; i < 7; ++i) bag.push_back(i);
     std::shuffle(bag.begin(), bag.end(), rng);
-    bag_index=0;
+    bag_index = 0;
 }
 
 int Game::next_from_bag(){
-    if(bag_index >= (int)bag.size()) refill_bag();
+    if (bag_index >= (int)bag.size()) {
+        refill_bag();
+    }
     return bag[bag_index++];
 }
 
@@ -76,9 +87,10 @@ void Game::lock_piece(){
 
     // detect clears and spins/effects
     auto cleared = detect_full_rows();
-    bool tspin = false;
+    // default no spin
+    TSpinType tspinType = TSpinType::None;
     if(current.id == 5 && last_was_rotate){
-        tspin = detect_tspin(*this, current, cur_pos);
+        tspinType = detect_tspin(*this, current, cur_pos);
     }
 
     // spawn text effects based on cleared rows and spins
@@ -93,19 +105,23 @@ void Game::lock_piece(){
 
         // choose text for clear count
         int cnt = (int)cleared.size();
-    if(cnt==1) spawn_text_effect("Single", SDL_Color{255,255,255,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 1);
-    else if(cnt==2) spawn_text_effect("Double", SDL_Color{200,255,200,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 2);
-    else if(cnt==3) spawn_text_effect("Triple", SDL_Color{200,200,255,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 3);
-    else if(cnt>=4) spawn_text_effect("Quad", SDL_Color{255,200,200,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 4);
+        if(cnt==1) spawn_text_effect("Single", SDL_Color{255,255,255,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 1);
+        else if(cnt==2) spawn_text_effect("Double", SDL_Color{200,255,200,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 2);
+        else if(cnt==3) spawn_text_effect("Triple", SDL_Color{200,200,255,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 3);
+        else if(cnt>=4) spawn_text_effect("Quad", SDL_Color{255,200,200,255}, 900, fx + field_w/2, fy + cleared[0]*CELL, 4);
 
         // all clear detection
         bool all_empty = true;
         for(int r=0;r<ROWS;r++) for(int c=0;c<COLS;c++) if(grid[r][c]) all_empty = false;
-    if(all_empty) spawn_text_effect("ALL CLEAR.", SDL_Color{255,215,0,255}, 1200, fx + field_w/2, fy + field_h/2, 5);
+        if(all_empty) spawn_text_effect("ALL CLEAR.", SDL_Color{255,215,0,255}, 1200, fx + field_w/2, fy + field_h/2, 5);
     } else {
         // no clears, but if tspin or rotation happened close to lock, show spin text
-        if(tspin){
-            spawn_text_effect("T-Spin", SDL_Color{255,100,255,255}, 1000, fx + cur_pos.x*CELL + CELL, fy + cur_pos.y*CELL, 10);
+        if(tspinType != TSpinType::None){
+            if(tspinType == TSpinType::Full){
+                spawn_text_effect("T-Spin", SDL_Color{255,100,255,255}, 1000, fx + cur_pos.x*CELL + CELL, fy + cur_pos.y*CELL, 10);
+            } else {
+                spawn_text_effect("T-Spin Mini", SDL_Color{200,120,200,255}, 900, fx + cur_pos.x*CELL + CELL, fy + cur_pos.y*CELL, 10);
+            }
         } else if(last_was_rotate && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_rotate_time).count() < 400){
             // generic piece spin (heuristic): show piece-specific spin text
             const char* names[7] = {"I spin","J spin","L spin","O spin","S spin","T-Spin","Z spin"};
@@ -187,42 +203,82 @@ static std::vector<Vec> rotate_blocks(const std::vector<Vec> &blocks, bool cw){
 }
 
 void Game::rotate_piece(bool clockwise){
-    // SRS kick tables (offsets) for J,L,S,Z,T (common) and I separately
-    const std::vector<std::vector<Vec>> kicks_common = {
-        {{0,0},{-1,0},{-1,1},{0,-2},{-1,-2}}, // 0->1
-        {{0,0},{1,0},{1,-1},{0,2},{1,2}},     // 1->2
-        {{0,0},{1,0},{1,1},{0,-2},{1,-2}},    // 2->3
-        {{0,0},{-1,0},{-1,-1},{0,2},{-1,2}}    // 3->0
-    };
-    const std::vector<std::vector<Vec>> kicks_i = {
-        {{0,0},{-2,0},{1,0},{-2,-1},{1,2}},
-        {{0,0},{-1,0},{2,0},{-1,2},{2,-1}},
-        {{0,0},{2,0},{-1,0},{2,1},{-1,-2}},
-        {{0,0},{1,0},{-2,0},{1,-2},{-2,1}}
-    };
+    // compute and store corner-occupancy before attempting rotation (strictness helper)
+    last_pre_rot_corner_count = 0;
+    if(current.id == 5){ // only relevant for T piece
+        int cx = cur_pos.x + 1;
+        int cy = cur_pos.y + 1;
+        bool ownCell[ROWS][COLS] = {false};
+        for (const auto &b : current.blocks){
+            int ox = cur_pos.x + b.x;
+            int oy = cur_pos.y + b.y;
+            if (ox>=0 && ox<COLS && oy>=0 && oy<ROWS) ownCell[oy][ox] = true;
+        }
+        std::array<std::pair<int,int>,4> corners = {{
+            {cx - 1, cy - 1}, {cx + 1, cy - 1},
+            {cx - 1, cy + 1}, {cx + 1, cy + 1}
+        }};
+        for (const auto &cr : corners) {
+            int rx = cr.first, ry = cr.second;
+            if (rx < 0 || rx >= COLS || ry < 0 || ry >= ROWS) last_pre_rot_corner_count++;
+            else if (grid[ry][rx] && !ownCell[ry][rx]) last_pre_rot_corner_count++;
+        }
+    } else {
+        last_pre_rot_corner_count = 0;
+    }
 
-    int from = current.orientation % 4;
-    int to = (from + (clockwise?1:3)) % 4;
-
+    // pre-rotate block coords
     std::vector<Vec> nb = rotate_blocks(current.blocks, clockwise);
 
-    const bool isI = (current.id == 0);
-    const auto &kicks = isI ? kicks_i : kicks_common;
+    int from = (current.orientation % 4 + 4) % 4;
+    int to = (from + (clockwise ? 1 : 3)) % 4;
 
-    // try kick offsets
-    for(const Vec &k : kicks[from]){
-        Vec np = cur_pos; np.x += k.x; np.y -= k.y; // note: y sign adjustments due to coord system
-        Piece p2 = current; p2.blocks = nb;
-        if(!collides(p2, np)){
+    // Standard SRS kick tables (JLSTZ and I) ...
+    const std::vector<std::vector<Vec>> kicks_jlstz = {
+        { {0,0}, {-1,0}, {-1,1}, {0,-2}, {-1,-2} },
+        { {0,0}, {1,0}, {1,-1}, {0,2}, {1,2} },
+        { {0,0}, {1,0}, {1,1}, {0,-2}, {1,-2} },
+        { {0,0}, {-1,0}, {-1,-1}, {0,2}, {-1,2} }
+    };
+    const std::vector<std::vector<Vec>> kicks_i = {
+        { {0,0}, {-2,0}, {1,0}, {-2,-1}, {1,2} },
+        { {0,0}, {-1,0}, {2,0}, {-1,2}, {2,-1} },
+        { {0,0}, {2,0}, {-1,0}, {2,1}, {-1,-2} },
+        { {0,0}, {1,0}, {-2,0}, {1,-2}, {-2,1} }
+    };
+
+    const bool isI = (current.id == 0);
+
+    // reset last-kick metadata
+    last_kick_index = -1;
+    last_kick_offset = {0,0};
+    last_was_rotate = false;
+
+    const auto &kicks_table = isI ? kicks_i : kicks_jlstz;
+
+    // Try standard kicks in order; store index and offset when one succeeds
+    for (size_t i = 0; i < kicks_table[from].size(); ++i) {
+        Vec k = kicks_table[from][i];
+        Vec np = cur_pos;
+        np.x += k.x;
+        np.y += k.y;
+
+        Piece p2 = current;
+        p2.blocks = nb;
+        if (!collides(p2, np)) {
+            // commit rotation
             current.blocks = nb;
             current.orientation = to;
+            cur_pos = np;
+            last_kick_index = (int)i;   // 0 == no offset, >0 == a kick was used
+            last_kick_offset = k;
             last_was_rotate = true;
             last_rotate_time = std::chrono::steady_clock::now();
-            cur_pos = np;
             return;
         }
     }
-    // if all kicks fail, no rotation
+
+    // rotation failed; leave last_kick_index = -1 and do not change piece
 }
 
 void Game::hold(){
@@ -364,11 +420,28 @@ void Game::render(){
             int val = grid[r][c];
             if(val){
                 SDL_Color col = T_COLORS[val-1];
-                SDL_SetRenderDrawColor(ren, std::max(0, col.r-50), std::max(0, col.g-50), std::max(0, col.b-50), 255);
-                SDL_RenderFillRect(ren, &cell);
-                SDL_Rect inner{cell.x+2, cell.y+2, cell.w-4, cell.h-4};
+                int px = cell.x;
+                int py = cell.y;
+                int w = cell.w;
+                int h = cell.h;
+
+                // soft neon light: much less intense additive blur (reduced layers/ext/alpha)
+                SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+                const int PLACED_GLOW_LAYERS = 3;
+                for(int li = PLACED_GLOW_LAYERS; li >= 1; --li){
+                    int ext = li * 2;
+                    Uint8 a = (Uint8)std::max(3, 24 / li);
+                    SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, a);
+                    SDL_Rect g{ px - ext, py - ext, w + ext*2, h + ext*2 };
+                    SDL_RenderFillRect(ren, &g);
+                }
+                SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+                // solid, single-color block (no stroke, no inner shading)
                 SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, 255);
-                SDL_RenderFillRect(ren, &inner);
+                SDL_Rect blockRect{ px, py, w, h };
+                SDL_RenderFillRect(ren, &blockRect);
+
             } else {
                 SDL_SetRenderDrawColor(ren, 20,20,20,255);
                 SDL_RenderFillRect(ren, &cell);
@@ -384,7 +457,21 @@ void Game::render(){
             int x = fx + (gp.x + b.x) * CELL;
             int y = fy + (gp.y + b.y) * CELL;
             SDL_Rect rc{x,y,CELL-1,CELL-1};
-            SDL_SetRenderDrawColor(ren, current.color.r/3, current.color.g/3, current.color.b/3,120);
+
+            // subtle neon ghost: soft additive glow + translucent core, no outlines
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+            const int GHOST_LAYERS = 2;
+            for(int li = GHOST_LAYERS; li >= 1; --li){
+                int ext = li * 2;
+                Uint8 a = (Uint8)std::max(4, 18 / li);
+                SDL_SetRenderDrawColor(ren, current.color.r/2, current.color.g/2, current.color.b/2, a);
+                SDL_Rect g{ rc.x - ext, rc.y - ext, rc.w + ext*2, rc.h + ext*2 };
+                SDL_RenderFillRect(ren, &g);
+            }
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+            // translucent core so ghost reads as "light" not solid
+            SDL_SetRenderDrawColor(ren, current.color.r, current.color.g, current.color.b, 140);
             SDL_RenderFillRect(ren, &rc);
         }
     }
@@ -405,30 +492,39 @@ void Game::render(){
                 SDL_Color col = T_COLORS[cellVal-1];
                 int px = fx + c*CELL;
                 int py = fy + r*CELL;
-                // drop shadow
-                SDL_SetRenderDrawColor(ren, 0,0,0,90);
-                SDL_Rect sh{px+4, py+4, CELL-1, CELL-1};
+
+                // drop shadow (keeps depth without extra stroke)
+                SDL_SetRenderDrawColor(ren, 0,0,0,65);
+                SDL_Rect sh{px+3, py+3, CELL-1, CELL-1};
                 SDL_RenderFillRect(ren, &sh);
 
+                // handle clear compression but still draw as a single solid block with glow
+                int drawX = px;
+                int drawY = py;
+                int drawW = CELL-1;
+                int drawH = CELL-1;
                 if(isClearing){
-                    // during stomp compress vertically
                     float scale = 1.0f - prog * 0.8f; // compress to 20%
-                    int h = std::max(1, int((CELL-1) * scale));
-                    int oy = ((CELL-1) - h)/2;
-                    SDL_Rect cellRect{px, py + oy, CELL-1, h};
-                    SDL_SetRenderDrawColor(ren, std::max(0, col.r-60), std::max(0, col.g-60), std::max(0, col.b-60), 255);
-                    SDL_RenderFillRect(ren, &cellRect);
-                    SDL_Rect inner{cellRect.x+3, cellRect.y+3, std::max(0, cellRect.w-6), std::max(0, cellRect.h-6)};
-                    SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, 255);
-                    SDL_RenderFillRect(ren, &inner);
-                } else {
-                    SDL_Rect cellRect{px, py, CELL-1, CELL-1};
-                    SDL_SetRenderDrawColor(ren, std::max(0, col.r-60), std::max(0, col.g-60), std::max(0, col.b-60), 255);
-                    SDL_RenderFillRect(ren, &cellRect);
-                    SDL_Rect inner{cellRect.x+3, cellRect.y+3, std::max(0, cellRect.w-6), std::max(0, cellRect.h-6)};
-                    SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, 255);
-                    SDL_RenderFillRect(ren, &inner);
+                    drawH = std::max(1, int((CELL-1) * scale));
+                    drawY = py + ((CELL-1) - drawH)/2;
                 }
+
+                // glow (soft, tuned)
+                SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+                const int CLR_GLOW_LAYERS = 3;
+                for(int li = CLR_GLOW_LAYERS; li >= 1; --li){
+                    int ext = li * 2;
+                    Uint8 a = (Uint8)std::max(4, 20 / li);
+                    SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, a);
+                    SDL_Rect g{ drawX - ext, drawY - ext, drawW + ext*2, drawH + ext*2 };
+                    SDL_RenderFillRect(ren, &g);
+                }
+                SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+                // solid block core
+                SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, 255);
+                SDL_Rect cellRect{drawX, drawY, drawW, drawH};
+                SDL_RenderFillRect(ren, &cellRect);
             }
         }
     }
@@ -438,6 +534,20 @@ void Game::render(){
         int x = fx + (cur_pos.x + b.x) * CELL;
         int y = fy + (cur_pos.y + b.y) * CELL;
         SDL_Rect rc{x,y,CELL-1,CELL-1};
+
+        // neon soft bloom: additive, tuned lower so it reads like a light source
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+        const int PIECE_GLOW_LAYERS = 3;
+        for(int li = PIECE_GLOW_LAYERS; li >= 1; --li){
+            int ext = li * 2;
+            Uint8 a = (Uint8)std::max(6, 24 / li);
+            SDL_SetRenderDrawColor(ren, current.color.r, current.color.g, current.color.b, a);
+            SDL_Rect g{ rc.x - ext, rc.y - ext, rc.w + ext*2, rc.h + ext*2 };
+            SDL_RenderFillRect(ren, &g);
+        }
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+        // solid core (no stroke)
         SDL_SetRenderDrawColor(ren, current.color.r, current.color.g, current.color.b,255);
         SDL_RenderFillRect(ren, &rc);
     }
@@ -474,8 +584,20 @@ void Game::render(){
         for(auto &bb: TETROS[id]){
             SDL_Rect rc{ bx + bb.x*CELL/2, by + bb.y*CELL/2, CELL/2 -1, CELL/2 -1 };
             SDL_Color col = T_COLORS[id];
+            // compact neon glow for previews (additive)
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+            for(int li=2; li>=1; --li){
+                int ext = li * 1;
+                Uint8 a = (Uint8)std::max(10, 45 / li);
+                SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, a);
+                SDL_Rect g{ rc.x - ext, rc.y - ext, rc.w + ext*2, rc.h + ext*2 };
+                SDL_RenderFillRect(ren, &g);
+            }
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
             SDL_SetRenderDrawColor(ren, col.r, col.g, col.b,255);
             SDL_RenderFillRect(ren, &rc);
+            SDL_SetRenderDrawColor(ren, std::max(0,col.r-90), std::max(0,col.g-90), std::max(0,col.b-90),220);
+            SDL_RenderDrawRect(ren, &rc);
         }
     }
 
@@ -490,6 +612,17 @@ void Game::render(){
         for(auto &bb: hold_piece.blocks){
             SDL_Rect rc{ bx + bb.x*CELL/2, by + bb.y*CELL/2, CELL/2 -1, CELL/2 -1 };
             SDL_Color col = hold_piece.color;
+            // small soft neon for hold (additive)
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_ADD);
+            for(int li=2; li>=1; --li){
+                int ext = li * 1;
+                Uint8 a = (Uint8)std::max(3, 15 / li);
+                SDL_SetRenderDrawColor(ren, col.r, col.g, col.b, a);
+                SDL_Rect g{ rc.x - ext, rc.y - ext, rc.w + ext*2, rc.h + ext*2 };
+                SDL_RenderFillRect(ren, &g);
+            }
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+            // solid hold block (no stroke)
             SDL_SetRenderDrawColor(ren, col.r, col.g, col.b,255);
             SDL_RenderFillRect(ren, &rc);
         }
