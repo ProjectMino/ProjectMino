@@ -150,4 +150,74 @@ SDL_Rect ScaleRect(const SDL_Rect& r) {
     return out;
 }
 
+// Added: logical layout helpers for the game's UI (returns scaled SDL_Rects)
+
+// Logical sizes in base coordinates (tweak to taste)
+static const int kBoardW = 520;
+static const int kBoardH = 520;
+static const int kHoldW = 120;
+static const int kHoldH = 40;
+static const int kNextW = 180;
+static const int kNextH = 320;
+static const int kStatsW = 220;
+static const int kStatsH = 160;
+static const int kAvatarW = 96;
+static const int kAvatarH = 96;
+static const int kGuestLabelW = 100;
+static const int kGuestLabelH = 28;
+static const int kPadding = 20;
+
+static SDL_Rect MakeRect(int x, int y, int w, int h) {
+    SDL_Rect r;
+    r.x = x; r.y = y; r.w = w; r.h = h;
+    return r;
+}
+
+// Board centered in the logical area (slightly raised)
+SDL_Rect GetBoardRect() {
+    int x = (g_base_w - kBoardW) / 2;
+    int y = (g_base_h - kBoardH) / 2 - 10;
+    return ScaleRect(MakeRect(x, y, kBoardW, kBoardH));
+}
+
+// Hold box at top-left
+SDL_Rect GetHoldRect() {
+    int x = kPadding;
+    int y = kPadding;
+    return ScaleRect(MakeRect(x, y, kHoldW, kHoldH));
+}
+
+// Next / upcoming pieces column at top-right
+SDL_Rect GetNextRect() {
+    int x = g_base_w - kNextW - kPadding;
+    int y = kPadding;
+    return ScaleRect(MakeRect(x, y, kNextW, kNextH));
+}
+
+// Stats column on the left (Time, Lines, Level, Score)
+SDL_Rect GetStatsRect() {
+    int x = kPadding;
+    int y = (g_base_h - kStatsH) / 2;
+    return ScaleRect(MakeRect(x, y, kStatsW, kStatsH));
+}
+
+// Avatar box near bottom-right
+SDL_Rect GetAvatarRect() {
+    int x = g_base_w - kAvatarW - kPadding;
+    int y = g_base_h - kAvatarH - kPadding - kGuestLabelH - 8; // leave space for the guest label
+    return ScaleRect(MakeRect(x, y, kAvatarW, kAvatarH));
+}
+
+// Guest label centered under avatar
+SDL_Rect GetGuestLabelRect() {
+    SDL_Rect avatar = GetAvatarRect();
+    // convert back to logical coordinates for computing label position
+    int ax = static_cast<int>(avatar.x / g_scale + 0.5f);
+    int ay = static_cast<int>(avatar.y / g_scale + 0.5f);
+    int aw = static_cast<int>(avatar.w / g_scale + 0.5f);
+    int lx = ax + (aw - kGuestLabelW) / 2;
+    int ly = ay + kAvatarH + 8;
+    return ScaleRect(MakeRect(lx, ly, kGuestLabelW, kGuestLabelH));
+}
+
 } // namespace ui
