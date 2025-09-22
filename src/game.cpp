@@ -1,11 +1,14 @@
 #include "game.h"
 #include "classic.h"   // <- ensure global options symbol is defined here
+#include "blitz.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <iostream>
 
 // define the global options instance declared in classic.h
 ClassicModeOptions g_classic_mode_options;
+// define the global blitz options instance declared in blitz.h
+BlitzModeOptions g_blitz_mode_options;
 
 const std::array<std::vector<Vec>,7> TETROS = {
     std::vector<Vec>{ {0,1},{1,1},{2,1},{3,1} },
@@ -41,6 +44,12 @@ Game::Game(){
 
     // capture the global classic options at creation time if any were set
     classic_opts = g_classic_mode_options;
+
+    // capture blitz options and start blitz if enabled
+    blitz_opts = g_blitz_mode_options;
+    if (blitz_opts.enabled){
+        start_blitz();
+    }
 }
 
 void Game::refill_bag(){
@@ -322,9 +331,27 @@ void Game::soft_drop(){ Vec np = cur_pos; np.y++; if(!collides(current, np)) cur
 
 void Game::hard_drop(){ Vec np = cur_pos; while(!collides(current, {np.x, np.y+1})) np.y++; cur_pos = np; lock_piece(); }
 
+void Game::start_blitz(){
+    blitz_active = true;
+    blitz_start_time = std::chrono::steady_clock::now();
+    // optional visual cue
+    spawn_text_effect("BLITZ START", SDL_Color{255,200,50,255}, 1200, 400, 5);
+}
+
 void Game::tick(){
     if(paused) return;
     auto now = std::chrono::steady_clock::now();
+
+    // If blitz active, check timer and end game when elapsed
+    if(blitz_active){
+        auto elapsed_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - blitz_start_time).count();
+        if(elapsed_ms >= blitz_opts.duration_ms){
+            // time up: end the round and return to main menu (for now, stop the game loop)
+            spawn_text_effect("TIME UP", SDL_Color{255,80,80,255}, 1400, 400, 5);
+            running = false;
+            return;
+        }
+    }
 
     // horizontal DAS/ARR
     if(horiz_held && horiz_dir != 0){
@@ -661,6 +688,19 @@ void Game::render(){
     draw_text(sx, sy+24, std::string("Score: ")+std::to_string(score));
     draw_text(sx, sy+48, std::string("Lines: ")+std::to_string(lines));
     draw_text(sx, sy+72, std::string("Level: ")+std::to_string(level));
+
+    // Blitz countdown display (when active)
+    if(blitz_active){
+        auto nowt = std::chrono::steady_clock::now();
+        int elapsed_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(nowt - blitz_start_time).count();
+        int remaining = blitz_opts.duration_ms - elapsed_ms;
+        if(remaining < 0) remaining = 0;
+        int mins = remaining / 60000;
+        int secs = (remaining / 1000) % 60;
+        std::string secstr = secs < 10 ? ("0" + std::to_string(secs)) : std::to_string(secs);
+        std::string timeLabel = std::to_string(mins) + ":" + secstr;
+        draw_text(sx, sy+96, std::string("Time: ") + timeLabel);
+    }
 
     // screen fade
     if(screen_fade > 0.001f){

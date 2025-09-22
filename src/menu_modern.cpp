@@ -3,6 +3,7 @@
 #include "wallpapers.h"     // <- replace forward decls with this include
 #include "classic.h"        // <- new: classic-mode options
 #include "game.h"           // <- new: run the game in-place
+#include "blitz.h"
 #include <SDL2/SDL_image.h>
 #include <vector>
 #include <string>
@@ -11,6 +12,9 @@
 #include <cmath>
 #include <iostream>   // added for debug logs
 #include <SDL2/SDL_ttf.h>
+
+// forward declaration so RunMainMenu can call it before the definition below
+void OnSelectBlitz(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* font);
 
 // small clamp helper for pre-C++17 compatibility
 template<typename T>
@@ -144,279 +148,65 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
 
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) { res.choice = "Exit"; running = false; }
-            else if (e.type == SDL_KEYDOWN) {
-                // If the Classic modal is open, handle keys here and skip the normal menu key handling.
-                if (show_classic_popup) {
-                    if (e.key.keysym.sym == SDLK_ESCAPE) {
-                        show_classic_popup = false;
-                    } else if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
-                        // launch game in-place using classic options (defaults for now)
-                        g_classic_mode_options = ClassicModeOptions{};
-                        // run the game blocking on the same window/renderer
-                        RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
-                        res.choice = "Singleplayer:Classic";
-                        running = false;
-                    }
-                    // consume this event
-                    continue;
-                }
-                 if (e.key.keysym.sym == SDLK_ESCAPE) {
-                     if (view == View::MAIN) {
-                         if (inlined_sp) { restoreMain(); }
-                         else { res.choice = "Exit"; running = false; }
-                     } else { view = View::MAIN; sub_selected = 0; }
-                 } else if (e.key.keysym.sym == SDLK_UP) {
-                     if (view == View::MAIN) {
-                         selected_idx = (selected_idx - 1 + main_items.size()) % main_items.size();
-                         // moving selection cancels exit state
-                         exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                     } else {
-                         int mx = (view==View::SP_SUB) ? (int)sp_sub.size() : (int)mp_sub.size();
-                         sub_selected = (sub_selected - 1 + mx) % mx;
-                     }
-                 } else if (e.key.keysym.sym == SDLK_DOWN) {
-                     if (view == View::MAIN) {
-                         selected_idx = (selected_idx + 1) % main_items.size();
-                         // moving selection cancels exit state
-                         exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                     } else {
-                         int mx = (view==View::SP_SUB) ? (int)sp_sub.size() : (int)mp_sub.size();
-                         sub_selected = (sub_selected + 1) % mx;
-                     }
-                 } else if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
-                     // handle enter press start (keydown)
-                     std::string curLabel = (view == View::MAIN && selected_idx >= 0 && selected_idx < (int)main_items.size()) ? main_items[selected_idx] : "";
-                     if (view == View::MAIN && curLabel == "Exit") {
-                         // If already armed, a second Enter press instantly quits
-                         if (!e.key.repeat && exit_armed) {
-                             res.choice = "Exit";
-                             running = false;
-                         } else {
-                             // first press arms; start hold timer to allow long hold auto-quit
-                             exit_armed = true;
-                             if (exit_hold_start == 0) exit_hold_start = SDL_GetTicks64();
-                             // do not immediately quit here
-                         }
-                     } else {
-                         // not the exit special handling; keep existing behavior
-                         if (view == View::MAIN) {
-                             if (!inlined_sp) {
-                                if (selected_idx == 0) { // Singleplayer
-                                    enterInlineSP();
-                                } else if (selected_idx == 1) { view = View::MP_SUB; sub_selected = 0; }
-                                else if (selected_idx == 2) {
-                                    // options placeholder
-                                } else { res.choice = "Exit"; running = false; }
-                             } else {
-                                const std::string &label = main_items[selected_idx];
-                                if (label == "Back") {
-                                    restoreMain();
-                                } else if (label == "Classic") {
-                                    // Open the modal instead of instantly selecting when using keyboard
-                                    show_classic_popup = true;
-                                    classic_play_hover = false;
-                                } else {
-                                    res.choice = std::string("Singleplayer:") + label;
-                                    running = false;
-                                }
-                             }
-                         } else if (view == View::SP_SUB) {
-                             if (sub_selected == 0) {
-                                 // start classic immediately (keyboard submenu)
-                                 g_classic_mode_options = ClassicModeOptions{};
-                                 RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
-                                 res.choice = "Singleplayer:Classic";
-                                 running = false;
-                             }
-                             else { res.choice = std::string("Singleplayer:") + sp_sub[sub_selected]; running = false; }
-                         } else if (view == View::MP_SUB) {
-                             res.choice = std::string("Multiplayer:") + mp_sub[sub_selected];
-                             running = false;
-                         }
-                     }
-                 }
-             } else if (e.type == SDL_KEYUP) {
-                // stop hold progress when Enter released; if progress reached 1.0 the quit would already have fired
-                if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
-                    if (exit_hold_start != 0) {
-                        exit_hold_start = 0;
-                        exit_hold_progress = 0.0f;
-                        // keep exit_armed true so a quick second press still works until selection changes
-                    }
-                }
-            } else if (e.type == SDL_MOUSEWHEEL) {
-                if (e.wheel.y < 0) { // down
-                    if (view == View::MAIN) {
-                        selected_idx = (selected_idx + 1) % main_items.size();
-                        exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                    }
-                    else {
-                        int mx = (view==View::SP_SUB) ? (int)sp_sub.size() : (int)mp_sub.size();
-                        sub_selected = (sub_selected + 1) % mx;
-                    }
-                } else {
-                    if (view == View::MAIN) {
-                        selected_idx = (selected_idx - 1 + main_items.size()) % main_items.size();
-                        exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                    }
-                    else {
-                        int mx = (view==View::SP_SUB) ? (int)sp_sub.size() : (int)mp_sub.size();
-                        sub_selected = (sub_selected - 1 + mx) % mx;
-                    }
-                }
-            } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-                // if modal open let it handle clicks first
-                if (show_classic_popup) {
-                    int mx = e.button.x, my = e.button.y;
-                    int w,h; SDL_GetRendererOutputSize(renderer, &w, &h);
-                    // modal rect
-                    int mw = std::min(1000, w - 160);
-                    int mh = std::min(680, h - 140);
-                    int mx0 = (w - mw)/2;
-                    int my0 = (h - mh)/2;
-                    // push the panels much further down inside the modal
-                    const int modal_y_offset = 160;
-                    // compute left panel and play button using same layout logic as rendering
-                    const int panel_gap = 28;
-                    int left_w = std::max(200, (mw - panel_gap) * 60 / 100);
-                    int left_x = mx0 + 20;
-                    int left_y = my0 + modal_y_offset;
-                     const int inner_vpad = 12;
-                     const int inner_hpad = 16;
-                     const int box_spacing = 10;
-                    // reduce panel height by the offset so panels sit lower in the modal
-                    int left_h = mh - (modal_y_offset + 20);
-                    int avail_h = left_h - (inner_vpad * 2) - (box_spacing * 2);
-                    int pb_h = clamp_val<int>((int)(avail_h * 0.30f), 56, avail_h - 80);
-                    int play_h = clamp_val<int>((int)(avail_h * 0.20f), 48, avail_h - pb_h - 40);
-                    int play_box_x = left_x + inner_hpad;
-                    int play_box_y = left_y + inner_vpad + pb_h + box_spacing;
-                    int play_box_w = left_w - inner_hpad*2;
-                    int play_box_h = play_h;
-                    // play button inner rect (matches rendering)
-                    SDL_Rect play_rect = { play_box_x + 10, play_box_y + (play_box_h / 8), play_box_w - 20, play_box_h - (play_box_h / 4) };
-                    // click Play
-                    if (mx >= play_rect.x && mx <= play_rect.x + play_rect.w && my >= play_rect.y && my <= play_rect.y + play_rect.h) {
-                        // set default classic options and start the game in-place
-                        g_classic_mode_options = ClassicModeOptions{};
-                        RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
-                        res.choice = "Singleplayer:Classic";
-                        running = false;
-                     } else {
-                        // clicking outside modal closes it
-                        if (!(mx >= mx0 && mx <= mx0 + mw && my >= my0 && my <= my0 + mh)) {
-                            show_classic_popup = false;
-                        }
-                     }
-                     // consume this click
-                     // any click resets exit arm
-                     exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                     continue;
-                }
-                 int mx = e.button.x, my = e.button.y;
-                 int w,h; SDL_GetRendererOutputSize(renderer, &w, &h);
-                // compute vertical layout like below and test clicks
-                int base_font = std::max(24, h/12);
-                // ensure asset fonts match sensible sizes for this window
-                EnsureFontsForSize(base_font);
-                TTF_Font* f = menu_font_loaded ? menu_font_loaded : font;
-                 std::vector<int> heights;
-                 int gap = 18;
-                 int total_h = 0;
-                 for (auto &s : main_items) {
-                     if (f) {
-                        SDL_Surface* surf = TTF_RenderUTF8_Blended(f, s.c_str(), {230,230,230,255});
-                        heights.push_back(surf ? surf->h : base_font);
-                        if (surf) SDL_FreeSurface(surf);
-                     } else heights.push_back(base_font);
-                     total_h += heights.back();
-                 }
-                 total_h += (main_items.size()-1) * gap;
-                int start_y = (h - total_h)/2;
-                int cx = w/2;
-                int y = start_y;
-                bool clicked = false;
-                for (size_t i=0;i<main_items.size();++i) {
-                     int th = heights[i];
-                     SDL_Rect rect = { cx - 300, y, 600, th }; // padded rect
-                     SDL_Rect pr = {rect.x - 20, rect.y - 8, rect.w + 40, rect.h + 16};
-                     if (mx >= pr.x && mx <= pr.x+pr.w && my >= pr.y && my <= pr.y+pr.h) {
-                         // clicked main item
-                         const std::string &label = main_items[i];
-                         if (label == "Singleplayer" && !inlined_sp) {
-                             enterInlineSP();
-                         } else if (label == "Back") {
-                             restoreMain();
-                         } else if (label == "Multiplayer") {
-                             view = View::MP_SUB; sub_selected = 0;
-                         } else if (label == "Options") {
-                             // placeholder
-                         } else if (label == "Exit") {
-                             // mouse click exits immediately (explicit)
-                             res.choice = "Exit"; running = false;
-                         } else {
-                             // if we're inlined_sp, any other label is a singleplayer choice
-                             if (inlined_sp) {
-                                 if (label == "Classic") {
-                                     // open modal instead of instant selection
-                                     show_classic_popup = true;
-                                     classic_play_hover = false;
-                                     classic_closed = false;
-                                 } else {
-                                     res.choice = std::string("Singleplayer:") + label;
-                                     running = false;
-                                 }
-                             }
-                         }
-                         // any click resets keyboard exit hold/arm state (except immediate exit)
-                         exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                         clicked = true;
-                         break;
-                     }
-                     y += th + gap;
-                 }
-                if (clicked) continue;
-                // if in submenu, test sub items area (to the right)
-                if (view != View::MAIN) {
-                    std::vector<std::string> &sub = (view==View::SP_SUB) ? sp_sub : mp_sub;
-                    // measure sub heights
-                    std::vector<int> sh;
-                    int total_sh = 0;
-                    // prefer the small in-game font for subitems when available
-                    TTF_Font* subf = sub_font_loaded ? sub_font_loaded : (menu_font_loaded ? menu_font_loaded : font);
-                    for (auto &s : sub) {
-                        SDL_Surface* surf = TTF_RenderUTF8_Blended(subf, s.c_str(), {230,230,230,255});
-                        sh.push_back(surf ? surf->h : base_font);
-                        if (surf) SDL_FreeSurface(surf);
-                        total_sh += sh.back();
-                    }
-                    total_sh += (sub.size()-1) * gap;
-                    int sub_x = w/2 + 240;
-                    int sy = (h - total_sh)/2;
-                    for (size_t i=0;i<sub.size();++i) {
-                        SDL_Rect pr = { sub_x - 20, sy - 8, 400, sh[i] + 16 };
-                        if (mx >= pr.x && mx <= pr.x+pr.w && my >= pr.y && my <= pr.y+pr.h) {
-                            if (view==View::SP_SUB) {
-                                if (i==0) {
-                                    g_classic_mode_options = ClassicModeOptions{};
-                                    RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
-                                    res.choice = "Singleplayer:Classic";
-                                    running = false;
-                                }
-                                else { res.choice = std::string("Singleplayer:")+sub[i]; running = false; }
+            if (e.type == SDL_QUIT) {
+                running = false;
+                res.choice = "Exit";
+            } else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                // when resized, refetch wallpaper if using dynamic source
+                need_refetch = true;
+            } else if (e.type == SDL_KEYDOWN) {
+                switch (e.key.keysym.sym) {
+                    case SDLK_UP:
+                        selected_idx = (selected_idx - 1 + (int)main_items.size()) % (int)main_items.size();
+                        exit_armed = false;
+                        break;
+                    case SDLK_DOWN:
+                        selected_idx = (selected_idx + 1) % (int)main_items.size();
+                        exit_armed = false;
+                        break;
+                    case SDLK_ESCAPE:
+                        if (inlined_sp) restoreMain();
+                        else { running = false; res.choice = "Exit"; }
+                        break;
+                    case SDLK_RETURN:
+                    case SDLK_KP_ENTER: {
+                        const std::string sel = main_items[selected_idx];
+                        // If we've inlined the singleplayer submenu, handle its entries
+                        if (inlined_sp) {
+                            if (sel == "Back") {
+                                restoreMain();
+                            } else if (sel == "Classic") {
+                                // show classic modal
+                                show_classic_popup = true;
+                            } else if (sel == "Blitz") {
+                                // Launch the blitz flow (shows modal + starts game if Play pressed)
+                                OnSelectBlitz(window, renderer, font);
+                                // keep menu visible afterwards
                             } else {
-                                res.choice = std::string("Multiplayer:")+sub[i];
-                                running = false;
+                                // other singleplayer modes could start games in-place
+                                // placeholder: run a normal game for now
+                                RunGameSDL(window, renderer, font);
                             }
-                            break;
+                        } else {
+                            // main menu selections
+                            if (sel == "Singleplayer") {
+                                enterInlineSP();
+                            } else if (sel == "Options") {
+                                // TODO: options panel
+                            } else if (sel == "Exit") {
+                                running = false;
+                                res.choice = "Exit";
+                            }
                         }
-                        sy += sh[i] + gap;
+                        // reset any exit hold state when making a selection
+                        exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
+                        break;
                     }
+                    default:
+                        break;
                 }
-            } else if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_RESIZED)) {
-                // request refetch for new size when using Unsplash
-                if (!use_image) need_refetch = true;
+            } else if (e.type == SDL_MOUSEBUTTONDOWN) {
+                // basic mouse click navigation could be added here if desired
             }
         }
 
@@ -747,4 +537,425 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
     if (sub_font_loaded)  { TTF_CloseFont(sub_font_loaded);  sub_font_loaded = nullptr; }
 
     return res;
+}
+
+// Minimal modal that mimics the classic modal but specialized for Blitz.
+// Returns true if the user clicked "Play", false for Back/Cancel.
+static bool ShowClassicMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* font, bool isBlitz) {
+    if (!window || !renderer) return false;
+    int w = 800, h = 600;
+    SDL_GetRendererOutputSize(renderer, &w, &h);
+
+    bool running = true;
+    bool play_pressed = false;
+    SDL_ShowCursor(SDL_ENABLE);
+
+    while (running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) { running = false; break; }
+            if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; break; }
+                if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) { play_pressed = true; running = false; break; }
+            } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                int mx = e.button.x, my = e.button.y;
+                // modal sizing
+                int mw = std::min(w - 160, std::max(600, w * 7 / 10));
+                int mh = std::min(h - 140, std::max(360, h * 5 / 10));
+                int mx0 = (w - mw) / 2;
+                int my0 = (h - mh) / 2;
+                // play button rect (simple centered button near bottom)
+                int pb_w = std::max(160, mw/3);
+                int pb_h = 56;
+                SDL_Rect play_rect = { mx0 + (mw - pb_w)/2, my0 + mh - pb_h - 28, pb_w, pb_h };
+                // back button to the left of play
+                int bb_w = std::max(120, mw/5);
+                SDL_Rect back_rect = { mx0 + 28, my0 + mh - pb_h - 28, bb_w, pb_h };
+
+                if (mx >= play_rect.x && mx <= play_rect.x + play_rect.w && my >= play_rect.y && my <= play_rect.y + play_rect.h) {
+                    play_pressed = true; running = false; break;
+                }
+                if (mx >= back_rect.x && mx <= back_rect.x + back_rect.w && my >= back_rect.y && my <= back_rect.y + back_rect.h) {
+                    running = false; break;
+                }
+                // click outside modal closes it
+                if (!(mx >= mx0 && mx <= mx0 + mw && my >= my0 && my <= my0 + mh)) {
+                    running = false;
+                    break;
+                }
+            }
+        }
+
+        // render simple modal
+        SDL_SetRenderDrawColor(renderer, 0,0,0,200);
+        SDL_RenderFillRect(renderer, nullptr);
+
+        // modal box
+        int mw = std::min(w - 160, std::max(600, w * 7 / 10));
+        int mh = std::min(h - 140, std::max(360, h * 5 / 10));
+        int mx0 = (w - mw) / 2;
+        int my0 = (h - mh) / 2;
+        SDL_Rect modal = { mx0, my0, mw, mh };
+        SDL_SetRenderDrawColor(renderer, 36,36,36, 230);
+        SDL_RenderFillRect(renderer, &modal);
+        SDL_SetRenderDrawColor(renderer, 80,80,80,255);
+        SDL_RenderDrawRect(renderer, &modal);
+
+        // header
+        std::string header = isBlitz ? "Blitz" : "Classic";
+        if (font) {
+            SDL_Surface* sh = TTF_RenderUTF8_Blended(font, header.c_str(), {240,240,240,255});
+            if (sh) {
+                SDL_Texture* th = SDL_CreateTextureFromSurface(renderer, sh);
+                SDL_Rect hdr = { mx0 + 20, my0 + 16, sh->w, sh->h };
+                SDL_RenderCopy(renderer, th, nullptr, &hdr);
+                SDL_DestroyTexture(th);
+                SDL_FreeSurface(sh);
+            }
+        }
+
+        // body text: show Blitz-specific info when isBlitz
+        std::string body = isBlitz ? "Score as many points as you can within 2:00.\nThe game will end when time expires." :
+                                     "Play a standard game of Tetris.";
+        // render body with basic line splitting
+        int by = my0 + 72;
+        int line_h = 20;
+        size_t start = 0;
+        while (start < body.size()) {
+            size_t nl = body.find('\n', start);
+            std::string line = (nl==std::string::npos) ? body.substr(start) : body.substr(start, nl-start);
+            if (font) {
+                SDL_Surface* sb = TTF_RenderUTF8_Blended(font, line.c_str(), {200,200,200,255});
+                if (sb) {
+                    SDL_Texture* tb = SDL_CreateTextureFromSurface(renderer, sb);
+                    SDL_Rect db = { mx0 + 20, by, sb->w, sb->h };
+                    SDL_RenderCopy(renderer, tb, nullptr, &db);
+                    SDL_DestroyTexture(tb);
+                    SDL_FreeSurface(sb);
+                    by += sb->h + 6;
+                } else {
+                    by += line_h;
+                }
+            } else {
+                by += line_h;
+            }
+            if (nl==std::string::npos) break;
+            start = nl + 1;
+        }
+
+        // play & back buttons
+        int pb_w = std::max(160, mw/3);
+        int pb_h = 56;
+        SDL_Rect play_rect = { mx0 + (mw - pb_w)/2, my0 + mh - pb_h - 28, pb_w, pb_h };
+        SDL_Rect back_rect = { mx0 + 28, my0 + mh - pb_h - 28, std::max(120, mw/5), pb_h };
+
+        // draw back
+        SDL_SetRenderDrawColor(renderer, 70,70,70, 200);
+        SDL_RenderFillRect(renderer, &back_rect);
+        SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+        if (font) {
+            SDL_Surface* sb = TTF_RenderUTF8_Blended(font, "Back", {240,240,240,255});
+            if (sb) {
+                SDL_Texture* tb = SDL_CreateTextureFromSurface(renderer, sb);
+                SDL_Rect db = { back_rect.x + (back_rect.w - sb->w)/2, back_rect.y + (back_rect.h - sb->h)/2, sb->w, sb->h };
+                SDL_RenderCopy(renderer, tb, nullptr, &db);
+                SDL_DestroyTexture(tb);
+                SDL_FreeSurface(sb);
+            }
+        }
+
+        // draw play
+        SDL_SetRenderDrawColor(renderer, 200,200,200, 230);
+        SDL_RenderFillRect(renderer, &play_rect);
+        if (font) {
+            SDL_Surface* sp = TTF_RenderUTF8_Blended(font, "Play", {12,12,12,255});
+            if (sp) {
+                SDL_Texture* tp = SDL_CreateTextureFromSurface(renderer, sp);
+                SDL_Rect dp = { play_rect.x + (play_rect.w - sp->w)/2, play_rect.y + (play_rect.h - sp->h)/2, sp->w, sp->h };
+                SDL_RenderCopy(renderer, tp, nullptr, &dp);
+                SDL_DestroyTexture(tp);
+                SDL_FreeSurface(sp);
+            }
+        }
+
+        SDL_RenderPresent(renderer);
+        SDL_Delay(12);
+    }
+
+    return play_pressed;
+}
+
+// Small standalone Blitz stats modal that reuses the visual layout of the larger
+// "Classic" modal in RunMainMenu but shows Blitz-specific stats.
+// Returns true when the user clicks Play, false for Back/cancel.
+static bool ShowBlitzStatsModal(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* font) {
+    if (!window || !renderer) return false;
+    int w = 800, h = 600;
+    SDL_GetRendererOutputSize(renderer, &w, &h);
+
+    bool running = true;
+    bool play_pressed = false;
+    SDL_ShowCursor(SDL_ENABLE);
+
+    // read blitz duration from global options
+    int dur_ms = std::max(0, g_blitz_mode_options.duration_ms);
+    int dur_s = dur_ms / 1000;
+    int mm = dur_s / 60;
+    int ss = dur_s % 60;
+    char dur_buf[32];
+    snprintf(dur_buf, sizeof(dur_buf), "%02d:%02d", mm, ss);
+
+    while (running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) { running = false; break; }
+            if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; break; }
+                if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) { play_pressed = true; running = false; break; }
+            } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                int mx = e.button.x, my = e.button.y;
+                // modal sizing
+                int mw = std::min(w - 160, std::max(600, w * 7 / 10));
+                int mh = std::min(h - 140, std::max(420, h * 7 / 10));
+                int mx0 = (w - mw) / 2;
+                int my0 = (h - mh) / 2;
+
+                // left/right panels and play/back locations mimic RunMainMenu's layout
+                const int panel_gap = 28;
+                const int modal_y_offset = 160;
+                int left_w = std::max(200, (mw - panel_gap) * 60 / 100);
+                int right_w = std::max(180, mw - left_w - panel_gap);
+                SDL_Rect left_panel = { mx0 + 20, my0 + modal_y_offset, left_w, mh - (modal_y_offset + 20) };
+                SDL_Rect right_panel = { left_panel.x + left_panel.w + panel_gap, my0 + modal_y_offset, right_w, mh - (modal_y_offset + 20) };
+
+                // Play & Back buttons
+                int pb_w = std::max(160, mw/3);
+                int pb_h = 56;
+                SDL_Rect play_rect = { mx0 + (mw - pb_w)/2, my0 + mh - pb_h - 28, pb_w, pb_h };
+                SDL_Rect back_rect = { mx0 + 28, my0 + mh - pb_h - 28, std::max(120, mw/5), pb_h };
+
+                if (mx >= play_rect.x && mx <= play_rect.x + play_rect.w && my >= play_rect.y && my <= play_rect.y + play_rect.h) {
+                    play_pressed = true; running = false; break;
+                }
+                if (mx >= back_rect.x && mx <= back_rect.x + back_rect.w && my >= back_rect.y && my <= back_rect.y + back_rect.h) {
+                    running = false; break;
+                }
+
+                // click outside modal closes it
+                if (!(mx >= mx0 && mx <= mx0 + mw && my >= my0 && my <= my0 + mh)) {
+                    running = false;
+                    break;
+                }
+            }
+        }
+
+        // render background fade
+        SDL_SetRenderDrawColor(renderer, 0,0,0,200);
+        SDL_RenderFillRect(renderer, nullptr);
+
+        // modal box
+        int mw = std::min(w - 160, std::max(600, w * 7 / 10));
+        int mh = std::min(h - 140, std::max(420, h * 7 / 10));
+        int mx0 = (w - mw) / 2;
+        int my0 = (h - mh) / 2;
+        SDL_Rect modal = { mx0, my0, mw, mh };
+        SDL_SetRenderDrawColor(renderer, 36,36,36, 230);
+        SDL_RenderFillRect(renderer, &modal);
+        SDL_SetRenderDrawColor(renderer, 80,80,80,255);
+        SDL_RenderDrawRect(renderer, &modal);
+
+        // header
+        std::string header = "Blitz";
+        if (font) {
+            SDL_Surface* sh = TTF_RenderUTF8_Blended(font, header.c_str(), {240,240,240,255});
+            if (sh) {
+                SDL_Texture* th = SDL_CreateTextureFromSurface(renderer, sh);
+                SDL_Rect hdr = { mx0 + 20, my0 + 16, sh->w, sh->h };
+                SDL_RenderCopy(renderer, th, nullptr, &hdr);
+                SDL_DestroyTexture(th);
+                SDL_FreeSurface(sh);
+            }
+        }
+
+        // layout panels (copy of RunMainMenu's layout)
+        const int panel_gap = 28;
+        const int modal_y_offset = 160;
+        int left_w = std::max(200, (mw - panel_gap) * 60 / 100);
+        int right_w = std::max(180, mw - left_w - panel_gap);
+        SDL_Rect left_panel = { mx0 + 20, my0 + modal_y_offset, left_w, mh - (modal_y_offset + 20) };
+        SDL_Rect right_panel = { left_panel.x + left_panel.w + panel_gap, my0 + modal_y_offset, right_w, mh - (modal_y_offset + 20) };
+
+        // panel backgrounds and inner boxes
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 36,36,36, 230);
+        SDL_RenderFillRect(renderer, &left_panel);
+        SDL_RenderFillRect(renderer, &right_panel);
+
+        const int inner_vpad = 12;
+        const int inner_hpad = 16;
+        const int box_spacing = 10;
+        int left_h = left_panel.h;
+        int avail_h = left_h - (inner_vpad * 2) - (box_spacing * 2);
+        int pb_h = clamp_val<int>((int)(avail_h * 0.30f), 56, std::max(56, avail_h - 80));
+        int play_h = clamp_val<int>((int)(avail_h * 0.20f), 48, std::max(48, avail_h - pb_h - 40));
+        int pb_box_x = left_panel.x + inner_hpad;
+        int pb_box_y = left_panel.y + inner_vpad;
+        int pb_box_w = left_panel.w - inner_hpad * 2;
+        SDL_Rect pb_box = { pb_box_x, pb_box_y, pb_box_w, pb_h };
+        int play_box_x = pb_box_x;
+        int play_box_y = pb_box_y + pb_h + box_spacing;
+        int play_box_w = pb_box_w;
+        int play_box_h = play_h;
+        SDL_Rect play_box = { play_box_x, play_box_y, play_box_w, play_box_h };
+        int replays_box_x = pb_box_x;
+        int replays_box_y = play_box_y + play_box_h + box_spacing;
+        int replays_box_h = (left_panel.y + left_panel.h) - replays_box_y - inner_vpad;
+        if (replays_box_h < 40) replays_box_h = std::max(40, (left_panel.y + left_panel.h) - replays_box_y);
+        SDL_Rect replays_box = { replays_box_x, replays_box_y, pb_box_w, replays_box_h };
+
+        SDL_SetRenderDrawColor(renderer, 24,24,24,220);
+        SDL_RenderFillRect(renderer, &pb_box);
+        SDL_RenderFillRect(renderer, &play_box);
+        SDL_RenderFillRect(renderer, &replays_box);
+
+        SDL_SetRenderDrawColor(renderer, 80,80,80,255);
+        SDL_RenderDrawRect(renderer, &pb_box);
+        SDL_RenderDrawRect(renderer, &play_box);
+        SDL_RenderDrawRect(renderer, &replays_box);
+        SDL_RenderDrawRect(renderer, &right_panel);
+
+        // Play button in left area
+        SDL_Rect play_button_inner = { play_box.x + 10, play_box.y + (play_box.h / 8), play_box.w - 20, play_box.h - (play_box.h / 4) };
+        if (play_button_inner.h < 34) { play_button_inner.h = std::max(34, play_box.h - 8); play_button_inner.y = play_box.y + (play_box.h - play_button_inner.h)/2; }
+        int mouse_x, mouse_y;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+        bool play_hover = (mouse_x >= play_button_inner.x && mouse_x <= play_button_inner.x + play_button_inner.w && mouse_y >= play_button_inner.y && mouse_y <= play_button_inner.y + play_button_inner.h);
+        if (play_hover) SDL_SetRenderDrawColor(renderer, 200,200,200, 220); else SDL_SetRenderDrawColor(renderer, 70,70,70, 160);
+        SDL_RenderFillRect(renderer, &play_button_inner);
+
+        // Draw small triangle icon for play button
+        int tri_h = std::min( (int)(play_button_inner.h * 0.7f), 48 );
+        int tri_w = std::max(12, tri_h * 2 / 3);
+        int tx = play_button_inner.x + 14;
+        int ty = play_button_inner.y + (play_button_inner.h - tri_h) / 2;
+        SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+        for (int r = 0; r < tri_h; ++r) {
+            float frac = (float)r / (float)tri_h;
+            int line_w = (int)(frac * tri_w);
+            SDL_RenderDrawLine(renderer, tx, ty + r, tx + line_w, ty + r);
+        }
+        if (font) {
+            SDL_Surface* sp = TTF_RenderUTF8_Blended(font, "Play", {255,255,255,255});
+            if (sp) {
+                SDL_Texture* tp = SDL_CreateTextureFromSurface(renderer, sp);
+                int text_x = play_button_inner.x + tri_w + 30;
+                int text_y = play_button_inner.y + (play_button_inner.h - sp->h) / 2;
+                int max_text_w = play_button_inner.w - (tri_w + 44);
+                int draw_w = std::min(sp->w, max_text_w);
+                SDL_Rect dst = { text_x, text_y, draw_w, sp->h };
+                SDL_RenderCopy(renderer, tp, nullptr, &dst);
+                SDL_DestroyTexture(tp);
+                SDL_FreeSurface(sp);
+            }
+        }
+
+        // Draw Blitz-specific stats into the Personal Best box (pb_box)
+        if (font) {
+            // Header
+            SDL_Surface* s0 = TTF_RenderUTF8_Blended(font, "Blitz Stats", {240,240,240,255});
+            if (s0) {
+                SDL_Texture* t0 = SDL_CreateTextureFromSurface(renderer, s0);
+                SDL_Rect d0 = { pb_box.x + 14, pb_box.y + 8, s0->w, s0->h };
+                SDL_RenderCopy(renderer, t0, nullptr, &d0);
+                SDL_DestroyTexture(t0);
+                SDL_FreeSurface(s0);
+            }
+            // Example stat lines: Personal Best, Games Played, Duration
+            char buf1[64]; snprintf(buf1, sizeof(buf1), "Personal Best: %d", 0);
+            char buf2[64]; snprintf(buf2, sizeof(buf2), "Games Played: %d", 0);
+            char buf3[64]; snprintf(buf3, sizeof(buf3), "Duration: %s", dur_buf);
+
+            SDL_Surface* s1 = TTF_RenderUTF8_Blended(font, buf1, {200,200,200,255});
+            SDL_Surface* s2 = TTF_RenderUTF8_Blended(font, buf2, {200,200,200,255});
+            SDL_Surface* s3 = TTF_RenderUTF8_Blended(font, buf3, {200,200,200,255});
+            int sy = pb_box.y + 36;
+            if (s1) { SDL_Texture* t1 = SDL_CreateTextureFromSurface(renderer, s1); SDL_Rect d = { pb_box.x + 14, sy, s1->w, s1->h }; SDL_RenderCopy(renderer, t1, nullptr, &d); SDL_DestroyTexture(t1); sy += s1->h + 6; SDL_FreeSurface(s1); }
+            if (s2) { SDL_Texture* t2 = SDL_CreateTextureFromSurface(renderer, s2); SDL_Rect d = { pb_box.x + 14, sy, s2->w, s2->h }; SDL_RenderCopy(renderer, t2, nullptr, &d); SDL_DestroyTexture(t2); sy += s2->h + 6; SDL_FreeSurface(s2); }
+            if (s3) { SDL_Texture* t3 = SDL_CreateTextureFromSurface(renderer, s3); SDL_Rect d = { pb_box.x + 14, sy, s3->w, s3->h }; SDL_RenderCopy(renderer, t3, nullptr, &d); SDL_DestroyTexture(t3); SDL_FreeSurface(s3); }
+        }
+
+        // Right panel placeholder content (leaderboard / rankings)
+        if (font) {
+            SDL_Surface* rh = TTF_RenderUTF8_Blended(font, "Leaderboard", {230,230,230,255});
+            if (rh) {
+                SDL_Texture* trh = SDL_CreateTextureFromSurface(renderer, rh);
+                SDL_Rect drh = { right_panel.x + 18, right_panel.y + 10, rh->w, rh->h };
+                SDL_RenderCopy(renderer, trh, nullptr, &drh);
+                SDL_DestroyTexture(trh);
+                SDL_FreeSurface(rh);
+            }
+            SDL_Surface* rem = TTF_RenderUTF8_Blended(font, "No leaderboard data available.", {120,140,155,255});
+            if (rem) {
+                SDL_Texture* trem = SDL_CreateTextureFromSurface(renderer, rem);
+                SDL_Rect drem = { right_panel.x + (right_panel.w - rem->w)/2, right_panel.y + (right_panel.h - rem->h)/2, rem->w, rem->h };
+                SDL_RenderCopy(renderer, trem, nullptr, &drem);
+                SDL_DestroyTexture(trem);
+                SDL_FreeSurface(rem);
+            }
+        }
+
+        // Back & Play buttons (bottom)
+        SDL_Rect back_rect = { mx0 + 28, my0 + mh - 56 - 28, std::max(120, mw/5), 56 };
+        SDL_Rect play_rect = { mx0 + (mw - std::max(160, mw/3))/2, my0 + mh - 56 - 28, std::max(160, mw/3), 56 };
+
+        SDL_SetRenderDrawColor(renderer, 70,70,70, 200);
+        SDL_RenderFillRect(renderer, &back_rect);
+        if (font) {
+            SDL_Surface* sb = TTF_RenderUTF8_Blended(font, "Back", {240,240,240,255});
+            if (sb) {
+                SDL_Texture* tb = SDL_CreateTextureFromSurface(renderer, sb);
+                SDL_Rect db = { back_rect.x + (back_rect.w - sb->w)/2, back_rect.y + (back_rect.h - sb->h)/2, sb->w, sb->h };
+                SDL_RenderCopy(renderer, tb, nullptr, &db);
+                SDL_DestroyTexture(tb);
+                SDL_FreeSurface(sb);
+            }
+        }
+
+        SDL_SetRenderDrawColor(renderer, 200,200,200, 230);
+        SDL_RenderFillRect(renderer, &play_rect);
+        if (font) {
+            SDL_Surface* sp = TTF_RenderUTF8_Blended(font, "Play", {12,12,12,255});
+            if (sp) {
+                SDL_Texture* tp = SDL_CreateTextureFromSurface(renderer, sp);
+                SDL_Rect dp = { play_rect.x + (play_rect.w - sp->w)/2, play_rect.y + (play_rect.h - sp->h)/2, sp->w, sp->h };
+                SDL_RenderCopy(renderer, tp, nullptr, &dp);
+                SDL_DestroyTexture(tp);
+                SDL_FreeSurface(sp);
+            }
+        }
+
+        SDL_RenderPresent(renderer);
+        SDL_Delay(12);
+    }
+
+    return play_pressed;
+}
+
+// user selected "Blitz" in main menu:
+void OnSelectBlitz(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* font){
+    // configure global Blitz options
+    g_blitz_mode_options.enabled = true;
+    g_blitz_mode_options.duration_ms = 120000; // 2 minutes; change if you expose duration in UI
+
+    // show a larger Blitz stats modal (layout copied from the Classic modal)
+    bool user_pressed_play = ShowBlitzStatsModal(window, renderer, font);
+
+    if(user_pressed_play){
+        // Start a brand new Blitz game. RunGameSDL will construct Game,
+        // which reads g_blitz_mode_options in its constructor and starts blitz if enabled.
+        RunGameSDL(window, renderer, font);
+
+        // clear the flag after the game ends so normal games are unaffected
+        g_blitz_mode_options.enabled = false;
+    }
 }

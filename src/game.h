@@ -10,6 +10,7 @@
 #include <algorithm>
 
 #include "classic.h"   // <- new: provide ClassicModeOptions to Game
+#include "blitz.h"     // <- add Blitz mode options
 
 const int CELL = 24; // size of a cell in pixels
 const int COLS = 10;
@@ -96,6 +97,12 @@ struct Game {
 
     // store the classic-mode options that were active when the game was started
     ClassicModeOptions classic_opts;
+
+    // Blitz mode support
+    BlitzModeOptions blitz_opts;
+    bool blitz_active = false;
+    std::chrono::steady_clock::time_point blitz_start_time;
+    void start_blitz();
 
     void spawn_text_effect(const std::string &txt, SDL_Color col, int life_ms, int x, int y, int type=0);
     void draw_colored_text(int x,int y,const std::string &text, SDL_Color color, float scale=1.0f, int alpha=255);

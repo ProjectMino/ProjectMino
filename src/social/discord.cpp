@@ -199,7 +199,7 @@ bool InitDiscordRPC(uint64_t appId, const std::string& bigImageKey) {
     return DiscordRPC::Get().Init(appId, bigImageKey);
 }
 void ShutdownDiscordRPC() { DiscordRPC::Get().Shutdown(); }
-void SetDiscordMode(DiscordRPC::Mode m) { DiscordRPC::Get().SetMode(m); }
+void SetDiscordMode(Mode m) { DiscordRPC::Get().SetMode(m); }
 void SetDiscordSmallImage(const std::string& key, const std::string& text) { DiscordRPC::Get().SetSmallImage(key, text); }
 void SetDiscordText(const std::string& details, const std::string& state) { DiscordRPC::Get().SetCustomText(details, state); }
 
