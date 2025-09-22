@@ -1,6 +1,8 @@
 #include "menu_modern.h"
 #include "debug_overlay.h"
 #include "wallpapers.h"     // <- replace forward decls with this include
+#include "classic.h"        // <- new: classic-mode options
+#include "game.h"           // <- new: run the game in-place
 #include <SDL2/SDL_image.h>
 #include <vector>
 #include <string>
@@ -9,6 +11,10 @@
 #include <cmath>
 #include <iostream>   // added for debug logs
 #include <SDL2/SDL_ttf.h>
+
+// small clamp helper for pre-C++17 compatibility
+template<typename T>
+static T clamp_val(T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // Minimal helper: load texture or nullptr
 static SDL_Texture* LoadTexture(SDL_Renderer* r, const std::string& path) {
@@ -145,6 +151,10 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     if (e.key.keysym.sym == SDLK_ESCAPE) {
                         show_classic_popup = false;
                     } else if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
+                        // launch game in-place using classic options (defaults for now)
+                        g_classic_mode_options = ClassicModeOptions{};
+                        // run the game blocking on the same window/renderer
+                        RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
                         res.choice = "Singleplayer:Classic";
                         running = false;
                     }
@@ -212,7 +222,13 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                                 }
                              }
                          } else if (view == View::SP_SUB) {
-                             if (sub_selected == 0) { res.choice = "Singleplayer:Classic"; running = false; }
+                             if (sub_selected == 0) {
+                                 // start classic immediately (keyboard submenu)
+                                 g_classic_mode_options = ClassicModeOptions{};
+                                 RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
+                                 res.choice = "Singleplayer:Classic";
+                                 running = false;
+                             }
                              else { res.choice = std::string("Singleplayer:") + sp_sub[sub_selected]; running = false; }
                          } else if (view == View::MP_SUB) {
                              res.choice = std::string("Multiplayer:") + mp_sub[sub_selected];
@@ -259,26 +275,44 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     int mh = std::min(680, h - 140);
                     int mx0 = (w - mw)/2;
                     int my0 = (h - mh)/2;
-                    // Play button area (left column center)
-                    int play_w = mw*60/100 - 80;
-                    int play_h = mh*18/100;
-                    int left_x = mx0 + 40;
-                    int left_y = my0 + 80;
-                    SDL_Rect play_rect = { left_x + 20, left_y + 70, play_w, play_h };
+                    // push the panels much further down inside the modal
+                    const int modal_y_offset = 160;
+                    // compute left panel and play button using same layout logic as rendering
+                    const int panel_gap = 28;
+                    int left_w = std::max(200, (mw - panel_gap) * 60 / 100);
+                    int left_x = mx0 + 20;
+                    int left_y = my0 + modal_y_offset;
+                     const int inner_vpad = 12;
+                     const int inner_hpad = 16;
+                     const int box_spacing = 10;
+                    // reduce panel height by the offset so panels sit lower in the modal
+                    int left_h = mh - (modal_y_offset + 20);
+                    int avail_h = left_h - (inner_vpad * 2) - (box_spacing * 2);
+                    int pb_h = clamp_val<int>((int)(avail_h * 0.30f), 56, avail_h - 80);
+                    int play_h = clamp_val<int>((int)(avail_h * 0.20f), 48, avail_h - pb_h - 40);
+                    int play_box_x = left_x + inner_hpad;
+                    int play_box_y = left_y + inner_vpad + pb_h + box_spacing;
+                    int play_box_w = left_w - inner_hpad*2;
+                    int play_box_h = play_h;
+                    // play button inner rect (matches rendering)
+                    SDL_Rect play_rect = { play_box_x + 10, play_box_y + (play_box_h / 8), play_box_w - 20, play_box_h - (play_box_h / 4) };
                     // click Play
                     if (mx >= play_rect.x && mx <= play_rect.x + play_rect.w && my >= play_rect.y && my <= play_rect.y + play_rect.h) {
+                        // set default classic options and start the game in-place
+                        g_classic_mode_options = ClassicModeOptions{};
+                        RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
                         res.choice = "Singleplayer:Classic";
                         running = false;
-                    } else {
+                     } else {
                         // clicking outside modal closes it
                         if (!(mx >= mx0 && mx <= mx0 + mw && my >= my0 && my <= my0 + mh)) {
                             show_classic_popup = false;
                         }
-                    }
-                    // consume this click
-                    // any click resets exit arm
-                    exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
-                    continue;
+                     }
+                     // consume this click
+                     // any click resets exit arm
+                     exit_armed = false; exit_hold_start = 0; exit_hold_progress = 0.0f;
+                     continue;
                 }
                  int mx = e.button.x, my = e.button.y;
                  int w,h; SDL_GetRendererOutputSize(renderer, &w, &h);
@@ -364,7 +398,12 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                         SDL_Rect pr = { sub_x - 20, sy - 8, 400, sh[i] + 16 };
                         if (mx >= pr.x && mx <= pr.x+pr.w && my >= pr.y && my <= pr.y+pr.h) {
                             if (view==View::SP_SUB) {
-                                if (i==0) { res.choice = "Singleplayer:Classic"; running = false; }
+                                if (i==0) {
+                                    g_classic_mode_options = ClassicModeOptions{};
+                                    RunGameSDL(window, renderer, menu_font_loaded ? menu_font_loaded : font);
+                                    res.choice = "Singleplayer:Classic";
+                                    running = false;
+                                }
                                 else { res.choice = std::string("Singleplayer:")+sub[i]; running = false; }
                             } else {
                                 res.choice = std::string("Multiplayer:")+sub[i];
@@ -508,11 +547,21 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                 int mx0 = (w - mw) / 2;
                 int my0 = (h - mh) / 2;
 
-                // layout columns: left ~60%, right ~40%
-                int left_w = mw * 60 / 100;
-                int right_w = mw - left_w - 40;
-                SDL_Rect left_panel = { mx0 + 20, my0 + 60, left_w, mh - 80 };
-                SDL_Rect right_panel = { mx0 + 20 + left_w + 40, my0 + 60, right_w, mh - 80 };
+                // Draw a slightly larger near-black background behind the modal
+                // that extends past the bottom of the window for a "goes off the page" effect.
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+                SDL_SetRenderDrawColor(renderer, 12, 12, 12, 255);
+                SDL_Rect bg_modal = { mx0 - 40, my0 - 24, mw + 80, mh + (h / 3) };
+                SDL_RenderFillRect(renderer, &bg_modal);
+
+                // layout columns: left ~60%, right ~40% with a consistent gap so panels don't overlap
+                const int panel_gap = 28;
+                // same vertical offset used for click-hit tests: push panels down inside the modal
+                const int modal_y_offset = 160;
+                int left_w = std::max(200, (mw - panel_gap) * 60 / 100);
+                int right_w = std::max(180, mw - left_w - panel_gap);
+                SDL_Rect left_panel = { mx0 + 20, my0 + modal_y_offset, left_w, mh - (modal_y_offset + 20) };
+                SDL_Rect right_panel = { left_panel.x + left_panel.w + panel_gap, my0 + modal_y_offset, right_w, mh - (modal_y_offset + 20) };
 
                 // header (centered above panels)
                 if (header_font) {
@@ -526,46 +575,67 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     }
                 }
 
-                // draw panel backgrounds
+                // compute inner boxes on the left panel (match mouse-hit calculations)
+                const int inner_vpad = 12;
+                const int inner_hpad = 16;
+                const int box_spacing = 10;
+                int left_h = left_panel.h;
+                int avail_h = left_h - (inner_vpad * 2) - (box_spacing * 2);
+                int pb_h = clamp_val<int>((int)(avail_h * 0.30f), 56, std::max(56, avail_h - 80));
+                int play_h = clamp_val<int>((int)(avail_h * 0.20f), 48, std::max(48, avail_h - pb_h - 40));
+                int pb_box_x = left_panel.x + inner_hpad;
+                int pb_box_y = left_panel.y + inner_vpad;
+                int pb_box_w = left_panel.w - inner_hpad * 2;
+                SDL_Rect pb_box = { pb_box_x, pb_box_y, pb_box_w, pb_h };
+                int play_box_x = pb_box_x;
+                int play_box_y = pb_box_y + pb_h + box_spacing;
+                int play_box_w = pb_box_w;
+                int play_box_h = play_h;
+                SDL_Rect play_box = { play_box_x, play_box_y, play_box_w, play_box_h };
+                int replays_box_x = pb_box_x;
+                int replays_box_y = play_box_y + play_box_h + box_spacing;
+                int replays_box_h = (left_panel.y + left_panel.h) - replays_box_y - inner_vpad;
+                if (replays_box_h < 40) replays_box_h = std::max(40, (left_panel.y + left_panel.h) - replays_box_y);
+                SDL_Rect replays_box = { replays_box_x, replays_box_y, pb_box_w, replays_box_h };
+
+                // draw panel backgrounds using black/gray theme
                 SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                SDL_SetRenderDrawColor(renderer, 10,18,26, 220);
+                // slightly lighter dark-gray panels
+                SDL_SetRenderDrawColor(renderer, 36,36,36, 230);
                 SDL_RenderFillRect(renderer, &left_panel);
                 SDL_RenderFillRect(renderer, &right_panel);
 
-                // left sub-boxes: pb (top), play (mid), replays (rest)
-                int pb_h = left_panel.h * 28 / 100;
-                int play_h = left_panel.h * 22 / 100;
-                int replays_h = left_panel.h - (pb_h + play_h + 32);
-                SDL_Rect pb_box = { left_panel.x + 16, left_panel.y + 8, left_panel.w - 32, pb_h };
-                SDL_Rect play_box = { left_panel.x + 16, pb_box.y + pb_box.h + 8, left_panel.w - 32, play_h };
-                SDL_Rect replays_box = { left_panel.x + 16, play_box.y + play_box.h + 8, left_panel.w - 32, replays_h };
-
-                SDL_SetRenderDrawColor(renderer, 6,12,18,220);
+                // inner boxes: slightly darker than panels for subtle contrast
+                SDL_SetRenderDrawColor(renderer, 24,24,24,220);
                 SDL_RenderFillRect(renderer, &pb_box);
                 SDL_RenderFillRect(renderer, &play_box);
                 SDL_RenderFillRect(renderer, &replays_box);
-                SDL_SetRenderDrawColor(renderer, 15,40,60,255);
+
+                // borders in medium gray
+                SDL_SetRenderDrawColor(renderer, 80,80,80,255);
                 SDL_RenderDrawRect(renderer, &pb_box);
                 SDL_RenderDrawRect(renderer, &play_box);
                 SDL_RenderDrawRect(renderer, &replays_box);
                 SDL_RenderDrawRect(renderer, &right_panel);
 
-                // Play button area: sized relative to play_box
-                SDL_Rect play_button_inner = { play_box.x + 8, play_box.y + (play_box.h / 8), play_box.w - 16, play_box.h - (play_box.h / 4) };
+                // Play button area: use tighter inner padding to ensure it stays inside play_box
+                SDL_Rect play_button_inner = { play_box.x + 10, play_box.y + (play_box.h / 8), play_box.w - 20, play_box.h - (play_box.h / 4) };
+                if (play_button_inner.h < 34) { play_button_inner.h = std::max(34, play_box.h - 8); play_button_inner.y = play_box.y + (play_box.h - play_button_inner.h)/2; }
                 int mouse_x, mouse_y;
                 SDL_GetMouseState(&mouse_x, &mouse_y);
                 classic_play_hover = (mouse_x >= play_button_inner.x && mouse_x <= play_button_inner.x + play_button_inner.w && mouse_y >= play_button_inner.y && mouse_y <= play_button_inner.y + play_button_inner.h);
+                // Play button colors for black/gray theme (hover: light gray, normal: medium gray)
                 if (classic_play_hover) {
-                    SDL_SetRenderDrawColor(renderer, 24,110,200, 200);
+                    SDL_SetRenderDrawColor(renderer, 200,200,200, 220);
                 } else {
-                    SDL_SetRenderDrawColor(renderer, 10,20,30, 160);
+                    SDL_SetRenderDrawColor(renderer, 70,70,70, 160);
                 }
                 SDL_RenderFillRect(renderer, &play_button_inner);
 
-                // triangle icon scaled to button height
+                // triangle icon scaled to button height (keep margin so it doesn't touch edges)
                 int tri_h = std::min( (int)(play_button_inner.h * 0.7f), 48 );
                 int tri_w = std::max(12, tri_h * 2 / 3);
-                int tx = play_button_inner.x + 18;
+                int tx = play_button_inner.x + 14;
                 int ty = play_button_inner.y + (play_button_inner.h - tri_h) / 2;
                 SDL_SetRenderDrawColor(renderer, 255,255,255,255);
                 for (int r = 0; r < tri_h; ++r) {
@@ -574,32 +644,51 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     SDL_RenderDrawLine(renderer, tx, ty + r, tx + line_w, ty + r);
                 }
 
-                // Play text scaled from header_font metrics
+                // Play text scaled from header_font metrics and placed so it doesn't overlap the triangle
                 if (header_font) {
                     SDL_Surface* sp = TTF_RenderUTF8_Blended(header_font, "Play", {255,255,255,255});
                     if (sp) {
                         SDL_Texture* tp = SDL_CreateTextureFromSurface(renderer, sp);
-                        SDL_Rect dst = { play_button_inner.x + tri_w + 36, play_button_inner.y + (play_button_inner.h - sp->h) / 2, sp->w, sp->h };
+                        int text_x = play_button_inner.x + tri_w + 30;
+                        int text_y = play_button_inner.y + (play_button_inner.h - sp->h) / 2;
+                        // clamp so text doesn't overflow the button
+                        int max_text_w = play_button_inner.w - (tri_w + 44);
+                        int draw_w = std::min(sp->w, max_text_w);
+                        SDL_Rect dst = { text_x, text_y, draw_w, sp->h };
                         SDL_RenderCopy(renderer, tp, nullptr, &dst);
                         SDL_DestroyTexture(tp);
                         SDL_FreeSurface(sp);
                     }
                 }
 
-                // Personal Best area (use small font)
+                // Personal Best area (use small font) - ensure positions fit in pb_box
                 if (small_font) {
                     SDL_Surface* s0 = TTF_RenderUTF8_Blended(small_font, "0 in 0.00.00", {240,240,240,255});
-                    if (s0) { SDL_Texture* t0 = SDL_CreateTextureFromSurface(renderer, s0); SDL_Rect d0 = { pb_box.x + 20, pb_box.y + 12, s0->w, s0->h }; SDL_RenderCopy(renderer, t0, nullptr, &d0); SDL_DestroyTexture(t0); SDL_FreeSurface(s0); }
+                    if (s0) {
+                        SDL_Texture* t0 = SDL_CreateTextureFromSurface(renderer, s0);
+                        SDL_Rect d0 = { pb_box.x + 14, pb_box.y + 12, s0->w, s0->h };
+                        if (d0.x + d0.w > pb_box.x + pb_box.w - 8) d0.w = std::max(8, (pb_box.x + pb_box.w - 8) - d0.x);
+                        SDL_RenderCopy(renderer, t0, nullptr, &d0);
+                        SDL_DestroyTexture(t0);
+                        SDL_FreeSurface(s0);
+                    }
                     SDL_Surface* s1 = TTF_RenderUTF8_Blended(small_font, "Personal Best", {170,190,200,255});
-                    if (s1) { SDL_Texture* t1 = SDL_CreateTextureFromSurface(renderer, s1); SDL_Rect d1 = { pb_box.x + 20, pb_box.y + 12 + ( (pb_box.h > 60) ? 44 : 28 ), s1->w, s1->h }; SDL_RenderCopy(renderer, t1, nullptr, &d1); SDL_DestroyTexture(t1); SDL_FreeSurface(s1); }
+                    if (s1) {
+                        SDL_Texture* t1 = SDL_CreateTextureFromSurface(renderer, s1);
+                        SDL_Rect d1 = { pb_box.x + 14, pb_box.y + 12 + ((pb_box.h > 60) ? 44 : 28), s1->w, s1->h };
+                        if (d1.y + d1.h > pb_box.y + pb_box.h - 8) d1.y = pb_box.y + pb_box.h - 8 - d1.h;
+                        SDL_RenderCopy(renderer, t1, nullptr, &d1);
+                        SDL_DestroyTexture(t1);
+                        SDL_FreeSurface(s1);
+                    }
                 }
 
-                // Replays heading (scaled)
+                // Replays heading (scaled) - fit inside replays_box
                 if (header_font) {
                     SDL_Surface* rh = TTF_RenderUTF8_Blended(header_font, "Replays", {230,230,230,255});
                     if (rh) {
                         SDL_Texture* trh = SDL_CreateTextureFromSurface(renderer, rh);
-                        SDL_Rect drh = { replays_box.x + 14, replays_box.y + 8, rh->w, rh->h };
+                        SDL_Rect drh = { replays_box.x + 10, replays_box.y + 8, rh->w, rh->h };
                         SDL_RenderCopy(renderer, trh, nullptr, &drh);
                         SDL_DestroyTexture(trh);
                         SDL_FreeSurface(rh);
@@ -610,6 +699,7 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     if (nop) {
                         SDL_Texture* tn = SDL_CreateTextureFromSurface(renderer, nop);
                         SDL_Rect dn = { replays_box.x + (replays_box.w - nop->w)/2, replays_box.y + (replays_box.h - nop->h)/2, nop->w, nop->h };
+                        if (dn.x < replays_box.x + 8) dn.x = replays_box.x + 8;
                         SDL_RenderCopy(renderer, tn, nullptr, &dn);
                         SDL_DestroyTexture(tn);
                         SDL_FreeSurface(nop);
@@ -631,7 +721,11 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                     SDL_Surface* rem = TTF_RenderUTF8_Blended(small_font, "Can't fetch rankings for this mode.", {120,140,155,255});
                     if (rem) {
                         SDL_Texture* trem = SDL_CreateTextureFromSurface(renderer, rem);
-                        SDL_Rect drem = { right_panel.x + (right_panel.w - rem->w)/2, right_panel.y + (right_panel.h - rem->h)/2, rem->w, rem->h };
+                        const float rank_scale = 0.80f;
+                        SDL_Rect drem = { right_panel.x + (right_panel.w - (int)(rem->w*rank_scale))/2,
+                                          right_panel.y + (right_panel.h - (int)(rem->h*rank_scale))/2,
+                                          (int)(rem->w*rank_scale),
+                                          (int)(rem->h*rank_scale) };
                         SDL_RenderCopy(renderer, trem, nullptr, &drem);
                         SDL_DestroyTexture(trem);
                         SDL_FreeSurface(rem);
@@ -639,14 +733,16 @@ MenuResult RunMainMenu(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* fon
                 }
          }
 
+        // present frame
         SDL_RenderPresent(renderer);
-    }
+
+        // tiny delay to avoid pegging CPU (and allow SDL to schedule)
+        SDL_Delay(8);
+    } // end while (running)
 
     // cleanup
-    // Cleanup: avoid double-destroy if bgtex points to tiletex
     if (bgtex && !bg_is_tile) SDL_DestroyTexture(bgtex);
     if (tiletex) SDL_DestroyTexture(tiletex);
-    // close any fonts we opened here (do not close the 'font' passed in)
     if (menu_font_loaded) { TTF_CloseFont(menu_font_loaded); menu_font_loaded = nullptr; }
     if (sub_font_loaded)  { TTF_CloseFont(sub_font_loaded);  sub_font_loaded = nullptr; }
 

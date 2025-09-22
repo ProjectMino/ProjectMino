@@ -9,6 +9,8 @@
 #include <string>
 #include <algorithm>
 
+#include "classic.h"   // <- new: provide ClassicModeOptions to Game
+
 const int CELL = 24; // size of a cell in pixels
 const int COLS = 10;
 const int ROWS = 20;
@@ -92,6 +94,9 @@ struct Game {
     // new: corner count before the last rotation (used to make T-spin detection stricter)
     int last_pre_rot_corner_count = 0;
 
+    // store the classic-mode options that were active when the game was started
+    ClassicModeOptions classic_opts;
+
     void spawn_text_effect(const std::string &txt, SDL_Color col, int life_ms, int x, int y, int type=0);
     void draw_colored_text(int x,int y,const std::string &text, SDL_Color color, float scale=1.0f, int alpha=255);
 
@@ -128,3 +133,8 @@ struct Game {
     void draw_text(int x,int y,const std::string &text);
     void render();
 };
+
+// Run the game using the provided SDL window/renderer/font.
+// This will block until the user exits the game (or the game signals stop).
+// Returns 0 normally.
+int RunGameSDL(SDL_Window* window, SDL_Renderer* renderer, TTF_Font* font);

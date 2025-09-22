@@ -10,140 +10,17 @@
 #include "menu.h"
 #include "menu_modern.h"
 #include "debug_overlay.h"
+#include "social/discord.h"
 
-// Replace this with your real game start function (call when user picks Classic).
-void StartGamePlaceholder(SDL_Renderer* renderer, TTF_Font* font) {
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Start Game", "Classic game would start now (replace StartGamePlaceholder).", nullptr);
-}
+// Forward declarations (replace with the real headers if available)
+TTF_Font* OpenScaledFont(const std::string& path, int size, SDL_Window* window);
+void StartGamePlaceholder(SDL_Renderer* renderer, TTF_Font* font);
 
-// Open font at a size scaled for the current display/window.
-// base_point_size is the nominal size (e.g. 28).
-static TTF_Font* OpenScaledFont(const std::string& font_path, int base_point_size, SDL_Window* window) {
-    if (font_path.empty()) return nullptr;
+int main() {
+    // initialize Discord RPC with app id and the large image key (asset key)
+    social::InitDiscordRPC(social::kDiscordAppId, "main");
+    // replace "main_image_key" with your Discord asset key for the large image
 
-    // Try DPI-based scaling first
-    float ddpi = 96.0f;
-    float hdpi = 0.0f, vdpi = 0.0f;
-    float scale = 1.0f;
-    if (SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) == 0) {
-        // ddpi is dots-per-inch for the display; treat 96 DPI as baseline
-        scale = ddpi / 96.0f;
-    } else {
-        // Fallback: scale by window size relative to a base resolution
-        int w = 1280, h = 720;
-        SDL_GetWindowSize(window, &w, &h);
-        float sx = float(w) / 1280.0f;
-        float sy = float(h) / 720.0f;
-        scale = std::min(sx, sy);
-    }
-
-    // Clamp reasonable scaling
-    scale = std::max(0.75f, std::min(scale, 3.0f));
-    int font_px = std::max(8, int(base_point_size * scale + 0.5f));
-
-    TTF_Font* f = TTF_OpenFont(font_path.c_str(), font_px);
-    if (!f) {
-        fprintf(stderr, "TTF_OpenFont('%s', %d) failed: %s\n", font_path.c_str(), font_px, TTF_GetError());
-    } else {
-        fprintf(stderr, "Loaded menu font: %s at size %d (scale %.2f)\n", font_path.c_str(), font_px, scale);
-    }
-    return f;
-}
-
-// Draw a small debug overlay at the bottom of the window with 50% alpha.
-// Shows three vertical lines: platform, version, compiler version.
-void DrawDebugInfo(SDL_Renderer* renderer, TTF_Font* font, SDL_Window* window) {
-    if (!renderer) return;
-
-    // Build platform string
-    std::string platform;
-#if defined(_WIN32)
-    platform = "Windows";
-#elif defined(__APPLE__)
-    platform = "macOS";
-#elif defined(__linux__)
-    platform = "Linux";
-#elif defined(__unix__)
-    platform = "Unix";
-#else
-    platform = "Unknown";
-#endif
-
-    // Version (fixed per request)
-    std::string version = "0.0.1";
-
-    // Compiler/version string
-    std::ostringstream comp;
-#if defined(__clang__)
-    comp << "clang " << __clang_version__;
-#elif defined(__GNUC__)
-    comp << "gcc " << __VERSION__;
-#elif defined(_MSC_VER)
-    comp << "msvc " << _MSC_VER;
-#else
-    comp << "unknown-compiler";
-#endif
-    std::string compiler = comp.str();
-
-    std::vector<std::string> lines = { platform, version, compiler };
-
-    // If no font available, skip drawing (can't render text)
-    if (!font) return;
-
-    // Color white; alpha will be applied to texture.
-    SDL_Color color = { 255, 255, 255, 255 };
-
-    int win_w = 0, win_h = 0;
-    SDL_GetWindowSize(window, &win_w, &win_h);
-
-    // Calculate total height
-    int line_spacing = 2;
-    int total_h = 0;
-    std::vector<SDL_Texture*> textures;
-    std::vector<SDL_Rect> rects;
-    textures.reserve(lines.size());
-    rects.reserve(lines.size());
-
-    for (const auto& ln : lines) {
-        SDL_Surface* surf = TTF_RenderUTF8_Blended(font, ln.c_str(), color);
-        if (!surf) {
-            rects.push_back({0,0,0,0});
-            textures.push_back(nullptr);
-            continue;
-        }
-        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-        SDL_FreeSurface(surf);
-        if (!tex) {
-            textures.push_back(nullptr);
-            rects.push_back({0,0,0,0});
-            continue;
-        }
-        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureAlphaMod(tex, 255); // fully opaque white
-        int tw = 0, th = 0;
-        SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
-        textures.push_back(tex);
-        rects.push_back({ 10, 0, tw, th }); // x will be 10 (left margin)
-        total_h += th;
-    }
-    total_h += int(line_spacing * (lines.size() - 1));
-
-    int start_y = win_h - total_h - 10; // 10 px bottom margin
-    int y = start_y;
-    for (size_t i = 0; i < textures.size(); ++i) {
-        SDL_Texture* tex = textures[i];
-        if (!tex) continue;
-        SDL_Rect dst = rects[i];
-        dst.y = y;
-        // keep left margin at 10
-        dst.x = 10;
-        SDL_RenderCopy(renderer, tex, nullptr, &dst);
-        y += dst.h + line_spacing;
-        SDL_DestroyTexture(tex);
-    }
-}
-
-int main(int argc, char** argv) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
