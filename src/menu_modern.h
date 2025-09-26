@@ -8,6 +8,9 @@ struct MenuResult {
     std::string slot;   // optional (empty if none)
 };
 
+// Declare the global UI flag defined in menu_modern.cpp
+extern bool g_loginPopupOpen;
+
 // Runs a blocking modern-styled main menu loop using the provided window/renderer/font.
 // bg_image_path: optional path to background image (use empty to use solid tile/gray)
 // Returns MenuResult when user chooses an item (Exit returns choice="Exit")

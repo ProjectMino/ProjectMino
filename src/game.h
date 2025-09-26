@@ -139,6 +139,23 @@ struct Game {
     void tick();
     void draw_text(int x,int y,const std::string &text);
     void render();
+
+    // board popup/combo helpers
+    void spawn_board_popup(const std::string &main_text, const std::string &sub_text = "", int life_ms = 900);
+
+    // combo state for consecutive clears (handles singles, doubles and quads)
+    int clear_combo_count = 0;                 // consecutive clear combo count
+    int last_clear_count_size = 0;             // last clear's line count (1,2,3,4...)
+    std::chrono::steady_clock::time_point last_clear_time;
+
+    struct BoardPopup {
+        std::string main;
+        std::string sub;
+        int life_ms = 0;
+        std::chrono::steady_clock::time_point start;
+        float base_scale = 1.0f;
+        bool active = false;
+    } board_popup;
 };
 
 // Run the game using the provided SDL window/renderer/font.

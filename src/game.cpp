@@ -3,12 +3,12 @@
 #include "blitz.h"
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
-// define the global options instance declared in classic.h
+// ensure a single definition of the globals (one TU only)
 ClassicModeOptions g_classic_mode_options;
-// define the global blitz options instance declared in blitz.h
-BlitzModeOptions g_blitz_mode_options;
+BlitzModeOptions   g_blitz_mode_options;
 
 const std::array<std::vector<Vec>,7> TETROS = {
     std::vector<Vec>{ {0,1},{1,1},{2,1},{3,1} },
@@ -132,10 +132,63 @@ void Game::lock_piece(){
 
         // choose text for clear count
         int cnt = (int)cleared.size();
-        if(cnt==1) spawn_text_effect("Single", SDL_Color{255,255,255,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 1);
-        else if(cnt==2) spawn_text_effect("Double", SDL_Color{200,255,200,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 2);
-        else if(cnt==3) spawn_text_effect("Triple", SDL_Color{200,200,255,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 3);
-        else if(cnt>=4) spawn_text_effect("Quad", SDL_Color{255,200,200,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 4);
+        auto now = std::chrono::steady_clock::now();
+
+        // general combo timeout (ms)
+        const int combo_timeout_ms = 2000;
+
+        // handle singles, doubles and quads with centered board popup + combo subtext
+        if(cnt == 1 || cnt == 2 || cnt >= 4){
+            std::string label;
+            if(cnt == 1) label = "Single";
+            else if(cnt == 2) label = "Double";
+            else label = (cnt == 4) ? "Quad" : (std::to_string(cnt) + " Lines");
+
+            // combo chaining: increment if same clear-size within timeout, otherwise reset
+            if(last_clear_count_size == cnt && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_clear_time).count() <= combo_timeout_ms){
+                clear_combo_count++;
+            } else {
+                clear_combo_count = 1;
+            }
+            last_clear_count_size = cnt;
+            last_clear_time = now;
+
+            std::string sub;
+            if(clear_combo_count > 1){
+                sub = std::string("x") + std::to_string(clear_combo_count) + " lines";
+                // combo particle flair
+                for(int r=0;r<8;r++){
+                    Particle p;
+                    p.x = (COLS/2) + ((rand()%200)/100.0f - 1.0f) * 3.0f;
+                    p.y = ROWS*0.22f + ((rand()%200)/100.0f - 1.0f) * 2.0f;
+                    p.vx = ((rand()%200)/100.0f - 1.0f) * 8.0f;
+                    p.vy = -((rand()%200)/100.0f) * 6.0f;
+                    p.size = 2.0f + (rand()%100)/100.0f * 2.0f;
+                    p.max_life = 400 + rand()%300;
+                    p.life = p.max_life;
+                    p.streak = false;
+                    p.col = SDL_Color{ (Uint8)std::min(255, current.color.r+30), (Uint8)std::min(255, current.color.g+30), (Uint8)std::min(255, current.color.b+30), 255 };
+                    particles.push_back(p);
+                }
+            }
+
+            // choose life: longer for combo/quads
+            int life = (clear_combo_count > 1 || cnt >= 4) ? 1400 : 1000;
+            spawn_board_popup(label, sub, life);
+
+            // per-cell particle accent
+            for(int r: rows_to_clear){
+                for(int c=0;c<COLS;c++) spawn_particles_at(c,r, SDL_Color{255,255,255,255}, 2, true);
+            }
+        } else {
+            // non-single/double/quad behavior: reset combo
+            last_clear_count_size = 0;
+            clear_combo_count = 0;
+
+            // preserve special handling for triple or other types if desired
+            if(cnt==3) spawn_text_effect("Triple", SDL_Color{200,200,255,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 3);
+            else if(cnt>4) spawn_text_effect(std::to_string(cnt) + " Lines", SDL_Color{255,200,200,255}, 900, fx + field_w/2, fy + cleared[0]*int(CELL*scale), 4);
+        }
 
         // all clear detection
         bool all_empty = true;
@@ -442,6 +495,15 @@ void Game::spawn_text_effect(const std::string &txt, SDL_Color col, int life_ms,
     te.start = std::chrono::steady_clock::now();
     te.x = x; te.y = y; te.type = type;
     effects.push_back(te);
+}
+
+void Game::spawn_board_popup(const std::string &main_text, const std::string &sub_text, int life_ms){
+    board_popup.main = main_text;
+    board_popup.sub = sub_text;
+    board_popup.life_ms = life_ms;
+    board_popup.start = std::chrono::steady_clock::now();
+    board_popup.base_scale = 1.0f;
+    board_popup.active = true;
 }
 
 void Game::render(){
@@ -791,6 +853,52 @@ void Game::render(){
                 break;
         }
         ++it;
+    }
+
+    // Board popup rendering (centered above the playfield)
+    if(board_popup.active){
+        auto nowt = std::chrono::steady_clock::now();
+        int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(nowt - board_popup.start).count();
+        if(elapsed >= board_popup.life_ms){
+            board_popup.active = false;
+        } else {
+            float t = elapsed / (float)board_popup.life_ms; // 0..1
+            // pop easing: big pop then settle, then fade
+            float pop = 1.0f;
+            if(t < 0.2f) pop = 1.8f - (t / 0.2f) * 0.6f;
+            else pop = 1.2f + (0.35f * (1.0f - t));
+            float alpha = 1.0f - std::pow(t, 1.2f);
+            int alpha_i = (int)(255 * alpha);
+
+            // main label — much bigger now (scale multiplier)
+            int center_x = fx + field_w/2;
+            int popup_y = fy - std::max(80, sCELL*2); // place well above board
+            float main_scale = pop * 2.4f;   // BIG text
+            draw_colored_text(center_x, popup_y, board_popup.main, SDL_Color{250,250,250,255}, main_scale, alpha_i);
+
+            // subtext (combo), smaller and below main
+            if(!board_popup.sub.empty()){
+                int sub_y = popup_y + int(40 * pop);
+                SDL_Color subcol = SDL_Color{200,200,220, (Uint8)alpha_i};
+                float sub_scale = pop * 1.2f;
+                draw_colored_text(center_x, sub_y, board_popup.sub, subcol, sub_scale, alpha_i);
+            }
+
+            // stronger particle pulse while popup visible
+            if(t < 0.6f && (rand()%4)==0){
+                Particle p;
+                p.x = (center_x - fx) / (float)sCELL + ((rand()%100)/100.0f - 0.5f) * 2.0f;
+                p.y = (popup_y - fy) / (float)sCELL + ((rand()%100)/100.0f - 0.5f) * 1.0f;
+                p.vx = ((rand()%200)/100.0f - 1.0f) * 3.5f;
+                p.vy = -((rand()%200)/100.0f) * 3.0f;
+                p.size = 2.0f + (rand()%100)/100.0f;
+                p.max_life = 400 + rand()%400;
+                p.life = p.max_life;
+                p.streak = false;
+                p.col = SDL_Color{ (Uint8)std::min(255, 230 + rand()%25), (Uint8)std::min(255, 230 + rand()%25), (Uint8)std::min(255, 230 + rand()%25), 255 };
+                particles.push_back(p);
+            }
+        }
     }
 
     SDL_RenderPresent(ren);
