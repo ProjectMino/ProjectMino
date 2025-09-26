@@ -56,7 +56,6 @@ Assuming your already in the game's directory and are using cmake, type the foll
 `
 make clean
 make
-export 
 ./tetris
 `
 
