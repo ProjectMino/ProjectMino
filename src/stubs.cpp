@@ -17,3 +17,17 @@ void StartGamePlaceholder(SDL_Renderer* /*renderer*/, TTF_Font* /*font*/) {
     // Replace with your actual game start/rendering function.
     return;
 }
+
+namespace social {
+    // keep signature matching the undefined symbol
+    void InitDiscordRPC(unsigned long /*appid*/, const std::string & /*appStr*/){}
+}
+
+namespace nexus {
+    void Init(){}
+    std::string GetSubtext(){ return std::string(); }
+    bool DropdownVisible(){ return false; }
+    std::string GetEditingPassMasked(){ return std::string(); }
+    std::string GetLoginStatus(){ return std::string(); }
+    void Shutdown(){}
+}

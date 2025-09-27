@@ -223,7 +223,7 @@ SDL_Texture* fetchUnsplashWallpaper(SDL_Renderer* renderer, int w, int h) {
 }
 
 // Render the wallpaper stretched to the full window size with a 40% black tint on top.
-void renderWallpaperWithTint(SDL_Renderer* renderer, SDL_Texture* wallpaper, int windowW, int windowH) {
+void renderWallpaperWithTint(SDL_Renderer* renderer, SDL_Texture* wallpaper, int windowW, int windowH, int tint_alpha) {
     if (!renderer) return;
 
     if (wallpaper) {
@@ -234,9 +234,9 @@ void renderWallpaperWithTint(SDL_Renderer* renderer, SDL_Texture* wallpaper, int
         SDL_RenderClear(renderer);
     }
 
-    // Apply stronger black tint (~60% opacity -> alpha 153)
+    // Apply black tint with caller-specified alpha
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 153);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, tint_alpha);
     SDL_Rect full = {0, 0, windowW, windowH};
     SDL_RenderFillRect(renderer, &full);
 }

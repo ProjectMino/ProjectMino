@@ -34,16 +34,37 @@ extern const std::array<SDL_Color,7> T_COLORS;
 // forward-declare so prototype can appear before full class definition
 class Game;
 
-// T-Spin result enum (Guideline)
-enum class TSpinType { None = 0, Mini = 1, Full = 2 };
+// effect / particle types used across game.cpp
+enum class TSpinType { None=0, Mini=1, Full=2 };
 
-// prototype for spin detection (implemented in spins.cpp)
-TSpinType detect_tspin(const Game &game, const Piece &current, Vec cur_pos);
+struct Particle {
+    float x,y;
+    float vx,vy;
+    float size;
+    int life;
+    int max_life;
+    bool streak;
+    SDL_Color col;
+};
 
-struct Game {
+struct TextEffect {
+    std::string text;
+    SDL_Color color;
+    int life_ms;
+    std::chrono::steady_clock::time_point start;
+    int type; // effect type
+    int x,y;
+};
+
+// Forward/aux declarations (detect_tspin implemented elsewhere)
+TSpinType detect_tspin(Game &g, const Piece &p, Vec pos);
+
+// Game class (excerpt showing added/modified members & APIs)
+class Game {
+public:
     SDL_Window* win = nullptr;
     SDL_Renderer* ren = nullptr;
-    TTF_Font* font = nullptr;
+
     Grid grid{};
 
     std::vector<int> bag;
@@ -54,6 +75,7 @@ struct Game {
     Piece current;
     Piece hold_piece;
     bool hold_used = false;
+    bool can_hold = true; // allow hold when true; disabled until next spawn after use
     Vec cur_pos{3,0};
 
     int score = 0;
@@ -67,8 +89,8 @@ struct Game {
     int drop_ms = 800;
 
     // input repeat (DAS/ARR) and soft-drop
-    int das_ms = 150; // delay before auto-shift
-    int arr_ms = 50;  // auto-repeat rate
+    int das_ms = 120; // delay before auto-shift (recommended default)
+    int arr_ms = 12;  // auto-repeat rate (default requested)
     bool horiz_held = false; // left/right held
     int horiz_dir = 0; // -1 left, +1 right
     bool horiz_repeating = false;
@@ -78,12 +100,21 @@ struct Game {
     int soft_ms = 50;
     std::chrono::steady_clock::time_point last_soft_move;
 
+    // Lock / spawn timing rules
+    int lock_delay_ms = 500; // lock delay (ms)
+    bool lock_active = false;
+    std::chrono::steady_clock::time_point lock_start;
+    int lock_resets = 0;
+    int max_lock_resets = 15; // prevent infinite stalling
+
+    int are_ms = 20; // spawn delay between pieces
+    bool spawn_pending = false;
+    std::chrono::steady_clock::time_point spawn_time;
+
     // Visuals: particles and animations
-    struct Particle { float x,y; float vx,vy; int life; int max_life; float size; bool streak; SDL_Color col; };
     std::vector<Particle> particles;
 
     // Text effects and spin detection
-    struct TextEffect { std::string text; SDL_Color color; int life_ms; std::chrono::steady_clock::time_point start; int x,y; int type; };
     std::vector<TextEffect> effects;
 
     // rotation / spin helpers
@@ -104,8 +135,30 @@ struct Game {
     std::chrono::steady_clock::time_point blitz_start_time;
     void start_blitz();
 
-    void spawn_text_effect(const std::string &txt, SDL_Color col, int life_ms, int x, int y, int type=0);
-    void draw_colored_text(int x,int y,const std::string &text, SDL_Color color, float scale=1.0f, int alpha=255);
+    // fonts (ensure these match uses in game.cpp)
+    TTF_Font* font = nullptr;        // regular in-game font
+    TTF_Font* popup_font = nullptr;  // big display font (display.otf)
+    // optional header texture used for UI ribbons (e.g. costume1.png)
+    SDL_Texture* header_tex = nullptr;
+    // optional wallpaper texture used as gameplay background
+    SDL_Texture* wallpaper = nullptr;
+
+    // text drawing helpers used by game.cpp
+    void draw_text(int x,int y,const std::string &text);
+    void draw_colored_text(int x,int y,const std::string &text, SDL_Color color, float scale, int alpha);
+        void draw_colored_text_left(int x,int y,const std::string &text, SDL_Color color, float scale, int alpha);
+    void draw_colored_text_font(int x,int y,const std::string &text, SDL_Color color, float scale, int alpha, TTF_Font* usefont);
+
+    // board popup helper (used for centered clears/spins)
+    void spawn_board_popup(const std::string &main, const std::string &sub, int life_ms);
+
+    // convenience overload so older 5-arg calls compile (for spawn_text_effect)
+    // canonical 6-arg declaration (used throughout game.cpp)
+    void spawn_text_effect(const std::string &text, SDL_Color col, int life_ms, int x, int y, int type);
+    // convenience 5-arg overload that forwards to the canonical form with type=0
+    inline void spawn_text_effect(const std::string &text, SDL_Color col, int life_ms, int x, int y) {
+        spawn_text_effect(text, col, life_ms, x, y, 0);
+    }
 
     // line clear animation
     std::vector<int> rows_to_clear;
@@ -123,6 +176,13 @@ struct Game {
 
     Game();
 
+    // Performance / attack metrics (display-only)
+    uint64_t pieces_placed = 0; // counts spawns (proxy for pieces played)
+    uint64_t actions_count = 0; // discrete input actions (edges, rotates, holds, hard-drops)
+    uint64_t total_attacks = 0; // total attacks (sum of cleared lines treated as attacks)
+    uint64_t lines_sent = 0;    // same as total_attacks for now (no networking present)
+    int spike_size = 0;         // largest single attack (max cleared lines)
+
     void refill_bag();
     int next_from_bag();
     void spawn_from_queue();
@@ -137,16 +197,34 @@ struct Game {
     void soft_drop();
     void hard_drop();
     void tick();
-    void draw_text(int x,int y,const std::string &text);
     void render();
-
-    // board popup/combo helpers
-    void spawn_board_popup(const std::string &main_text, const std::string &sub_text = "", int life_ms = 900);
 
     // combo state for consecutive clears (handles singles, doubles and quads)
     int clear_combo_count = 0;                 // consecutive clear combo count
     int last_clear_count_size = 0;             // last clear's line count (1,2,3,4...)
     std::chrono::steady_clock::time_point last_clear_time;
+
+    // scoring helpers
+    bool back_to_back = false; // indicates last clear was B2B-eligible
+    int combo_chain = 0;       // combo counter (consecutive clears on successive locks)
+
+    // simple input state suitable for a deterministic step() API
+    struct InputState {
+        bool left = false;
+        bool right = false;
+        bool left_edge = false;  // true on key-down edge
+        bool right_edge = false; // true on key-down edge
+        bool soft = false;
+        bool hard = false;
+        bool rotate_cw = false;
+        bool rotate_ccw = false;
+        bool hold = false;
+        bool hold_pressed = false; // edge detect
+    };
+
+    // Process one frame worth of inputs and advance the game by one tick.
+    // This implements the requested `step(frameInputs)` style API.
+    void step(const InputState &in);
 
     struct BoardPopup {
         std::string main;
