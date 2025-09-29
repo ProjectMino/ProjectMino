@@ -5,16 +5,12 @@
 
 # What is it?
 
-Project Mino is a open sourse puzzle stacker simaller to tetris, developed by Mino Moves Inc. To improve the experience of competive players. Providing built in features for tournaments and more right out of the box!
+Project Mino is a rhythm game all about catching fruit, developed by Mino Moves!
 
 # Build instructions.
 
 > [!WARNING]  
 > Project Mino is curently in heavy active development, and things always change. Building from sourse curently does not include auto-updating, meaning you'll have to build again to recieve new updates.
-
-> [!NOTE]  
-> These built instructions are meant primairlly created for Unix like systems, (MacOS/Linux.) Although you can use them on Windows using MSYS2, you should use Microsoft's own [Visual Studio](https://visualstudio.microsoft.com/) for the best experience!
-
 <h1>⠀</h1>
 
 ## Prerequisites
@@ -56,12 +52,6 @@ Assuming your already in the game's directory and are using cmake, type the foll
 `
 make clean
 make
-./tetris
-`
-
-If you'd like the game to fetch background images from Unsplash, make sure to get your API key from, https://unsplash.com/developers then type the following command.
-`
-export UNSPLASH_ACCESS_KEY=YOUR_API_KEY_HERE
 `
 
 and the game client should start!
