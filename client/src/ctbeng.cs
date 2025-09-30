@@ -19,14 +19,7 @@ namespace ProjectMino.Client
 		public int? ColorArgb { get; set; }
 	}
 
-	// Tracks score/combo/misses for a running map
-	public class MapState
-	{
-		public int Score { get; set; }
-		public int Combo { get; set; }
-		public int HighestCombo { get; set; }
-		public int Misses { get; set; }
-	}
+	// scoring state moved to ScoreStat in scorestat.cs
 
 	// Simple CTB (catch the beat) engine: schedules NoteEvent spawns and tracks a basic score state.
 	public class CtbEngine : IDisposable
@@ -39,8 +32,8 @@ namespace ProjectMino.Client
 		// Fired when the engine decides it's time to spawn a note. The UI/game should subscribe.
 	public event Action<NoteEvent>? OnSpawn;
 
-		// Map runtime state (score/combo/misses)
-		public MapState State { get; } = new MapState();
+	// Scoring/statistics helper (moved into ScoreStat)
+	public ScoreStat Score { get; } = new ScoreStat();
 
 		// Tick frequency in milliseconds
 		public int TickMs { get; set; } = 10;
@@ -70,6 +63,18 @@ namespace ProjectMino.Client
 			tickTimer.Start();
 		}
 
+		// Returns elapsed milliseconds since engine Start() was called.
+		// If the engine hasn't been started, returns 0.
+		public int ElapsedMs
+		{
+			get
+			{
+				if (startTimeUtc == default(DateTime)) return 0;
+				try { return (int)(DateTime.UtcNow - startTimeUtc).TotalMilliseconds; }
+			catch { return 0; }
+			}
+		}
+
 		public void Stop()
 		{
 			tickTimer.Stop();
@@ -77,10 +82,7 @@ namespace ProjectMino.Client
 
 		private void ResetState()
 		{
-			State.Score = 0;
-			State.Combo = 0;
-			State.HighestCombo = 0;
-			State.Misses = 0;
+			Score.Reset();
 		}
 
 	private void Timer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -107,19 +109,22 @@ namespace ProjectMino.Client
 			}
 		}
 
-		// Call when a note was successfully collected
+		// Call when a note was successfully collected - delegate to ScoreStat.
+		// Returns the judgment kind based on timing if caller wants it; this overload
+		// keeps the original signature for compatibility and simply updates score.
 		public void RegisterHit(int scoreForNote = 100)
 		{
-			State.Combo++;
-			if (State.Combo > State.HighestCombo) State.HighestCombo = State.Combo;
-			State.Score += scoreForNote * Math.Max(1, State.Combo);
+			// If caller wants timing-based judgment, they can use ScoreStat directly.
+			// For backward compatibility we simply increase combo/score by one note.
+			// We'll assume a neutral timing (best-effort): boost combo and add score.
+			// This keeps previous behavior for code that calls RegisterHit() without timing.
+			Score.RegisterHitWithTiming(0, 0, scoreForNote);
 		}
 
 		// Call when a note was missed
 		public void RegisterMiss()
 		{
-			State.Misses++;
-			State.Combo = 0;
+			Score.RegisterMiss();
 		}
 
 		public void Dispose()
