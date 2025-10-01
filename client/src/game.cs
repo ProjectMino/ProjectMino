@@ -50,6 +50,15 @@ namespace ProjectMino.Client
 			playbackStatusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			host.Controls.Add(playbackStatusLabel);
 
+			// Score label in top-right
+			scoreLabel = new Label();
+			scoreLabel.AutoSize = true;
+			scoreLabel.ForeColor = Color.White;
+			scoreLabel.BackColor = Color.Transparent;
+			scoreLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			scoreLabel.Location = new Point(host.ClientSize.Width - 220, 8);
+			host.Controls.Add(scoreLabel);
+
 			// Renderer sized to client area
 			renderer = new PpmRenderer(host.ClientSize.Width, host.ClientSize.Height);
 
@@ -89,6 +98,8 @@ namespace ProjectMino.Client
 					Color c = Color.White;
 					if (ev.ColorArgb.HasValue) c = Color.FromArgb(ev.ColorArgb.Value);
 					var note = new FallingNote { X = fx, Y = -32, Color = c };
+					// attach scheduled time if engine provides elapsed reference
+					try { note.ScheduledTimeMs = ev.TimeMs; } catch { }
 					// Marshal additions to the UI thread to avoid concurrent modification while UpdateFrame iterates the list
 					try
 					{
@@ -175,6 +186,8 @@ namespace ProjectMino.Client
 			public int Radius = 36;
 			public float Speed = 160f; // pixels per second
 			public Color Color = Color.White;
+			// scheduled hit time in milliseconds since map start (if available)
+			public int ScheduledTimeMs = 0;
 		}
 
 		// Simple particle for splash effect
@@ -192,6 +205,19 @@ namespace ProjectMino.Client
 
 		private List<Particle> particles = new List<Particle>();
 		private Random rand = new Random();
+
+		// Judgment popup structure
+		private class Judgment
+		{
+			public string Text = "";
+			public Color Color;
+			public PointF Position;
+			public float Scale;
+			public float Opacity;
+			public float Lifetime;
+			public float Age;
+		}
+		private List<Judgment> judgments = new List<Judgment>();
 
 		// Combo display state
 		private int lastCombo = 0;
@@ -240,8 +266,10 @@ namespace ProjectMino.Client
         // Track manager for music playback
 	private TrackManager? trackManager;
 
-		// Playback status UI
-		private Label playbackStatusLabel;
+	// Playback status UI
+	private Label playbackStatusLabel;
+	// Score display (top-right)
+	private Label scoreLabel;
 
 		public GameForm()
 		{
@@ -264,6 +292,15 @@ namespace ProjectMino.Client
 			playbackStatusLabel.Location = new Point(8, 8);
 			playbackStatusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 			Controls.Add(playbackStatusLabel);
+
+			// Score label in top-right
+			scoreLabel = new Label();
+			scoreLabel.AutoSize = true;
+			scoreLabel.ForeColor = Color.White;
+			scoreLabel.BackColor = Color.Transparent;
+			scoreLabel.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+			scoreLabel.Location = new Point(ClientSize.Width - 220, 8);
+			Controls.Add(scoreLabel);
 			// ensure arrow keys are treated as input when the canvas has focus
 			canvas.TabStop = true;
 			canvas.PreviewKeyDown += (s, e) => {
@@ -312,6 +349,7 @@ namespace ProjectMino.Client
 					Color c = Color.White;
 					if (ev.ColorArgb.HasValue) c = Color.FromArgb(ev.ColorArgb.Value);
 					var note = new FallingNote { X = fx, Y = -32, Color = c };
+					try { note.ScheduledTimeMs = ev.TimeMs; } catch { }
 					try
 					{
 						if (canvas != null && canvas.IsHandleCreated)
@@ -402,7 +440,7 @@ namespace ProjectMino.Client
 			bowl?.Draw(renderer);
 
 			// Combo animation: detect changes and pop
-			int currentCombo = engine?.State?.Combo ?? 0;
+			int currentCombo = engine?.Score?.Combo ?? 0;
 			if (currentCombo != lastCombo)
 			{
 				// trigger pop when combo increases
@@ -438,20 +476,106 @@ namespace ProjectMino.Client
 				var noteRect = new Rectangle((int)(n.X - n.Radius), (int)(n.Y - n.Radius), n.Radius * 2, n.Radius * 2);
 				if (noteRect.IntersectsWith(bar))
 				{
-					engine?.RegisterHit();
+					// Use ScoreStat to register hit with timing so scoring aligns with judgment
+					ScoreStat.JudgmentKind kind = ScoreStat.JudgmentKind.Good;
+					try
+					{
+						if (engine != null)
+						{
+							if (n.ScheduledTimeMs != 0)
+							{
+				    var k = engine.Score.RegisterHitWithTiming(n.ScheduledTimeMs, engine.ElapsedMs, 100);
+				    kind = k;
+							}
+							else
+							{
+								// Unknown scheduled time: register hit without timing
+								engine.RegisterHit(100);
+								kind = ScoreStat.JudgmentKind.Good;
+							}
+						}
+					}
+					catch { }
+
 					// set combo color from this note
 					comboColor = n.Color;
 					// spawn splash particles using the note color
 					SpawnSplash((int)n.X, (int)n.Y, 12, n.Color);
+
+					// create a judgment popup based on kind
+					try
+					{
+						string txt = "Good";
+						Color col = Color.LightGreen;
+						switch (kind)
+						{
+							case ScoreStat.JudgmentKind.Perfect: txt = "Perfect"; col = Color.LightBlue; break;
+							case ScoreStat.JudgmentKind.Good: txt = "Good"; col = Color.LightGreen; break;
+							case ScoreStat.JudgmentKind.Meh: txt = "Meh"; col = Color.Yellow; break;
+							case ScoreStat.JudgmentKind.Miss: txt = "Miss"; col = Color.Red; break;
+						}
+						var j = new Judgment
+						{
+							Text = txt,
+							Color = col,
+							Position = new PointF(bar.X + bar.Width/2f, bar.Y - 36f),
+							Scale = 1.6f,
+							Opacity = 1f,
+							Lifetime = 0.9f,
+							Age = 0f
+						};
+						judgments.Add(j);
+					}
+					catch { }
 					activeNotes.RemoveAt(i);
 					continue;
 				}
 				// If passed bottom, it's a miss
 				if (n.Y - n.Radius > renderer.Height)
 				{
-					engine?.RegisterMiss();
+					// register miss in score stat
+					try { engine?.Score.RegisterMiss(); } catch { }
+					// show miss judgment
+					try
+					{
+						var bar2 = bowl.GetBarRect(renderer.Width, renderer.Height);
+						var jm = new Judgment
+						{
+							Text = "Miss",
+							Color = Color.Red,
+							Position = new PointF(bar2.X + bar2.Width/2f, bar2.Y - 36f),
+							Scale = 1.6f,
+							Opacity = 1f,
+							Lifetime = 1.1f,
+							Age = 0f
+						};
+						judgments.Add(jm);
+					}
+					catch { }
 					activeNotes.RemoveAt(i);
 					continue;
+				}
+			}
+
+			// Update and draw judgments
+			if (judgments.Count > 0 && renderer != null)
+			{
+				for (int ji = judgments.Count - 1; ji >= 0; ji--)
+				{
+					var j = judgments[ji];
+					j.Age += dt;
+					if (j.Age >= j.Lifetime) { judgments.RemoveAt(ji); continue; }
+					// simple popup animation: scale up then float up and fade
+					float t = j.Age / j.Lifetime;
+					float ease = 1f - (float)Math.Pow(1f - t, 3);
+					float scale = j.Scale * (1f + 0.2f * (1f - t));
+					float yOffset = -20f * ease;
+					float alpha = j.Opacity * (1f - t);
+					using (var f = new Font(comboFont.FontFamily, 20f * scale, comboFont.Style))
+					{
+						var col = Color.FromArgb((int)(alpha * 255), j.Color);
+						renderer.DrawTextCentered(j.Text, f, col, new PointF(j.Position.X, j.Position.Y + yOffset));
+					}
 				}
 			}
 
@@ -491,14 +615,14 @@ namespace ProjectMino.Client
 			// Draw combo above bowl
 			if (engine != null)
 			{
-				if (bowl != null && renderer != null && engine.State != null)
+				if (bowl != null && renderer != null && engine.Score != null)
 				{
 					var bar = bowl.GetBarRect(renderer.Width, renderer.Height);
 					var cx = bar.X + bar.Width / 2f;
 					var cy = bar.Y - 56f; // higher above the bar
-					if (engine.State.Combo > 0)
+					if (engine.Score.Combo > 0)
 					{
-						string text = $"{engine.State.Combo}x";
+						string text = $"{engine.Score.Combo}x";
 					// scale font by comboScale
 					float baseSize = 18f * comboScale;
 					using (var f = new Font(comboFont.FontFamily, baseSize, comboFont.Style))
@@ -519,6 +643,18 @@ namespace ProjectMino.Client
 					var pos = trackManager.CurrentPositionMs;
 					playbackStatusLabel.Text = $"Track: {name} | {playing} | {pos:0} ms";
 				}
+
+				// update score label if available
+				try
+				{
+					if (engine?.Score != null && scoreLabel != null)
+					{
+						scoreLabel.Text = $"Score: {engine.Score.Score}";
+						// reposition to keep right aligned in case of width changes
+						scoreLabel.Location = new Point(this.ClientSize.Width - scoreLabel.PreferredWidth - 8, 8);
+					}
+				}
+				catch { }
 			}
 			catch { }
 
